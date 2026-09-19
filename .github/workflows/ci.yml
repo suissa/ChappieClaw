@@ -2,18 +2,104 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - "feat/**"
+      - "fix/**"
   pull_request:
-    branches: [main]
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ZIG_VERSION: "0.16.0"
+
 jobs:
-  zig:
-    uses: nullclaw/nullbuilder/.github/workflows/zig-ci.yml@v1
-    permissions:
-      contents: read
-    with:
-      binary_name: nullclaw
-      artifact_prefix: nullclaw
+  quality:
+    name: Format and unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Zig version
+        run: zig version
+
+      - name: Check formatting
+        run: zig fmt --check build.zig src
+
+      - name: Run test suite
+        run: zig build test --summary all
+
+  release-small:
+    name: ReleaseSmall build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: quality
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Build optimized binary
+        run: zig build -Doptimize=ReleaseSmall
+
+      - name: Verify binary
+        run: |
+          test -x zig-out/bin/nullclaw
+          ./zig-out/bin/nullclaw --help >/dev/null
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: chappieclaw-linux-x86_64
+          path: zig-out/bin/nullclaw
+          if-no-files-found: error
+          retention-days: 7
+
+  coding-contract:
+    name: AllasCode coding contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: quality
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Verify coding module is part of root test graph
+        run: |
+          grep -q 'pub const coding = @import("coding.zig");' src/root.zig
+          test -f src/coding/policy.zig
+          test -f src/coding/skills.zig
+          test -f src/coding/safety.zig
+          test -f docs/coding-agent/ARCHITECTURE.md
+
+      - name: Run test suite with coding contract
+        run: zig build test --summary all

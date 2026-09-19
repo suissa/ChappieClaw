@@ -50,6 +50,9 @@ pub const from_json = @import("from_json.zig");
 pub const inbound_debounce = @import("inbound_debounce.zig");
 pub const inbound_router = @import("inbound_router.zig");
 
+// AllasCode coding-agent specialization (opt-in)
+pub const coding = @import("coding.zig");
+
 // Phase 2: Agent core
 pub const agent = @import("agent.zig");
 pub const session = @import("session.zig");
