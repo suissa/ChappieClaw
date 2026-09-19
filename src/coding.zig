@@ -11,6 +11,7 @@ pub const profiles = @import("coding/profiles.zig");
 pub const healing = @import("coding/healing.zig");
 pub const lineage = @import("coding/lineage.zig");
 pub const acp = @import("coding/acp.zig");
+pub const safety = @import("coding/safety.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
