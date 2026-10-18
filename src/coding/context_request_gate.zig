@@ -50,14 +50,10 @@ pub fn admit(
         .candidate_tokens = c.candidate_tokens,
     };
 
-    const original_marker_len = @max(@as(usize, 1), original_bytes);
-    const candidate_marker_len = @max(@as(usize, 1), candidate_bytes);
-    const original_marker = try std.heap.page_allocator.alloc(u8, original_marker_len);
+    const original_marker = try fingerprintMarker(std.heap.page_allocator, original, original_bytes);
     defer std.heap.page_allocator.free(original_marker);
-    const candidate_marker = try std.heap.page_allocator.alloc(u8, candidate_marker_len);
+    const candidate_marker = try fingerprintMarker(std.heap.page_allocator, c.request, candidate_bytes);
     defer std.heap.page_allocator.free(candidate_marker);
-    @memset(original_marker, 0);
-    @memset(candidate_marker, 0);
 
     const admitted = try gateway.beforeInference(
         intent_id,
@@ -71,6 +67,53 @@ pub fn admit(
         return .{ .request = original, .transformed = false };
     }
     return .{ .request = c.request, .transformed = true };
+}
+
+fn fingerprintMarker(allocator: std.mem.Allocator, request: providers.ChatRequest, size: usize) ![]u8 {
+    const marker = try allocator.alloc(u8, @max(@as(usize, 1), size));
+    const hash = fingerprintRequest(request);
+    const hash_bytes = std.mem.asBytes(&hash);
+    for (marker, 0..) |*byte, index| byte.* = hash_bytes[index % hash_bytes.len];
+    return marker;
+}
+
+fn fingerprintRequest(request: providers.ChatRequest) u64 {
+    var hash: u64 = 0xcbf29ce484222325;
+    const mix = struct {
+        fn bytes(value: []const u8, current: *u64) void {
+            for (value) |byte| {
+                current.* ^= byte;
+                current.* *%= 0x100000001b3;
+            }
+        }
+    }.bytes;
+    mix(request.model, &hash);
+    if (request.session_id) |id| mix(id, &hash);
+    for (request.messages) |message| {
+        hash ^= @intFromEnum(message.role);
+        hash *%= 0x100000001b3;
+        mix(message.content, &hash);
+        if (message.name) |name| mix(name, &hash);
+        if (message.tool_call_id) |id| mix(id, &hash);
+        if (message.content_parts) |parts| {
+            for (parts) |part| switch (part) {
+                .text => |text| mix(text, &hash),
+                .image_url => |image| mix(image.url, &hash),
+                .image_base64 => |image| {
+                    mix(image.media_type, &hash);
+                    mix(image.data, &hash);
+                },
+            };
+        }
+    }
+    if (request.tools) |tools| {
+        for (tools) |tool| {
+            mix(tool.name, &hash);
+            mix(tool.description, &hash);
+            mix(tool.parameters_json, &hash);
+        }
+    }
+    return hash;
 }
 
 fn requestSize(request: providers.ChatRequest) usize {
