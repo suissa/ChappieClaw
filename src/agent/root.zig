@@ -32,6 +32,7 @@ const SecurityPolicy = @import("../security/policy.zig").SecurityPolicy;
 const util = @import("../util.zig");
 const verbose_mod = @import("../verbose.zig");
 const cost_mod = @import("../cost.zig");
+const context_gateway_mod = @import("../coding/context_gateway.zig");
 
 const cache = memory_mod.cache;
 pub const dispatcher = @import("dispatcher.zig");
@@ -2186,6 +2187,11 @@ pub const Agent = struct {
 
             _ = iter_arena.reset(.retain_capacity);
             const arena = iter_arena.allocator();
+            // One bounded audit scope per model iteration. The gateway validates
+            // the response boundary; provider requests remain byte-for-byte intact
+            // until a lossless context transformer is explicitly configured.
+            var context_gateway = context_gateway_mod.Gateway(512){};
+            const context_intent_id: u128 = std.hash.Wyhash.hash(0, effective_user_message);
 
             const timer_start = std_compat.time.milliTimestamp();
             const is_streaming = self.stream_callback != null and self.stream_ctx != null and self.provider.supportsStreaming();
@@ -2550,7 +2556,16 @@ pub const Agent = struct {
             const display_text = selectDisplayText(response_text, parsed_text, parsed_calls.len);
 
             if (parsed_calls.len == 0) {
-                const trimmed_display_text = std.mem.trim(u8, display_text, " \t\r\n");
+                const admitted_response = try context_gateway.beforeReturn(
+                    @as(u64, iteration) + 1,
+                    context_intent_id,
+                    display_text,
+                    .text,
+                    true,
+                    false,
+                );
+                if (admitted_response.decision == .reject) return error.ContextGatewayRejected;
+                const trimmed_display_text = std.mem.trim(u8, admitted_response.bytes, " \t\r\n");
 
                 if (trimmed_display_text.len == 0) {
                     self.freeResponseFields(&response);
@@ -2717,6 +2732,23 @@ pub const Agent = struct {
             }
 
             for (parsed_calls, 0..) |call, idx| {
+                // Validate the argument envelope before any tool execution.
+                // Authorization remains with executeTool/security policy below.
+                const parsed_args = std.json.parseFromSlice(std.json.Value, arena, call.arguments_json, .{}) catch null;
+                const arguments_are_object = if (parsed_args) |parsed| blk: {
+                    defer parsed.deinit();
+                    break :blk parsed.value == .object;
+                } else false;
+                const gated_call = try context_gateway.beforeReturn(
+                    @as(u64, iteration) + 1,
+                    context_intent_id,
+                    call.arguments_json,
+                    .structured,
+                    call.name.len > 0 and arguments_are_object,
+                    false,
+                );
+                const gateway_rejected_call = gated_call.decision == .reject;
+
                 if (self.isInterruptRequested()) {
                     self.freeResponseFields(&response);
                     return self.interruptedReply();
@@ -2737,6 +2769,14 @@ pub const Agent = struct {
 
                 const tool_timer = std_compat.time.milliTimestamp();
                 const result = blk: {
+                    if (gateway_rejected_call) {
+                        break :blk ToolExecutionResult{
+                            .name = call.name,
+                            .output = "Rejected by Context Gateway: tool name or arguments failed structural validation",
+                            .success = false,
+                            .tool_call_id = call.tool_call_id,
+                        };
+                    }
                     if (cachedToolCallResultInTurn(&seen_tool_call_results, call)) |cached_result| {
                         break :blk ToolExecutionResult{
                             .name = call.name,
