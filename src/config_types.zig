@@ -302,7 +302,7 @@ pub const AutonomyConfig = struct {
 };
 
 pub const DockerRuntimeConfig = struct {
-    image: []const u8 = "alpine:3.20",
+    image: []const u8 = "alpine:3.24",
     network: []const u8 = "none",
     memory_limit_mb: ?u64 = 512,
     cpu_limit: ?f64 = 1.0,
@@ -814,14 +814,31 @@ pub const WeComConfig = struct {
 };
 
 pub const WeixinConfig = struct {
+    pub const DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com/";
+
     account_id: []const u8 = "default",
     /// Bot token obtained from iLink QR code login flow.
     token: []const u8 = "",
     /// iLink API base URL (may be region-specific after login redirect).
-    base_url: []const u8 = "https://ilinkai.weixin.qq.com/",
+    base_url: []const u8 = DEFAULT_BASE_URL,
     /// Optional HTTP proxy URL for API requests.
     proxy: ?[]const u8 = null,
     allow_from: []const []const u8 = &.{},
+
+    /// iLink requests carry bot credentials, so plaintext remote endpoints are
+    /// never valid even when they point at a private or loopback address.
+    pub fn isValidBaseUrl(raw: []const u8) bool {
+        if (!ProviderEntry.isValidBaseUrl(raw)) return false;
+        const uri = std.Uri.parse(raw) catch return false;
+        if (!std.ascii.eqlIgnoreCase(uri.scheme, "https")) return false;
+        if (uri.user != null or uri.password != null) return false;
+        if (uri.port) |port| if (port == 0) return false;
+        return true;
+    }
+
+    pub fn isValidProxyUrl(raw: []const u8) bool {
+        return HttpRequestConfig.isValidProxyUrl(raw);
+    }
 };
 
 pub const SignalConfig = struct {
@@ -1300,6 +1317,7 @@ pub const MemoryConfig = struct {
     /// Profile preset — convenience shortcut for common setups.
     profile: []const u8 = "hybrid_keyword",
     backend: []const u8 = DEFAULT_MEMORY_BACKEND,
+    database_path: []const u8 = "",
     instance_id: []const u8 = "",
     auto_save: bool = true,
     citations: []const u8 = "auto",
@@ -1880,7 +1898,7 @@ pub const McpServerConfig = struct {
     transport: []const u8 = DEFAULT_TRANSPORT,
     command: []const u8 = "",
     url: ?[]const u8 = null,
-    /// Per-request wall clock timeout for HTTP transport. 0 = default.
+    /// Per-request wall clock timeout for HTTP and stdio transports.
     timeout_ms: u32 = 10_000,
     args: []const []const u8 = &.{},
     env: []const McpEnvEntry = &.{},
@@ -1967,6 +1985,12 @@ pub const SessionConfig = struct {
     /// Higher values enable parallel processing across different sessions.
     max_concurrent_tasks: u32 = 4,
 };
+
+// Regression: the default Docker runtime must not point at an unsupported Alpine branch.
+test "DockerRuntimeConfig defaults to supported pinned image" {
+    const cfg = DockerRuntimeConfig{};
+    try std.testing.expectEqualStrings("alpine:3.24", cfg.image);
+}
 
 test "WebConfig defaults" {
     const cfg = WebConfig{};
