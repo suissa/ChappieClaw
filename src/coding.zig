@@ -14,6 +14,7 @@ pub const acp = @import("coding/acp.zig");
 pub const safety = @import("coding/safety.zig");
 pub const context_gateway = @import("coding/context_gateway.zig");
 pub const context_stream_gate = @import("coding/context_stream_gate.zig");
+pub const context_request_gate = @import("coding/context_request_gate.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
