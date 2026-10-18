@@ -33,6 +33,10 @@ const util = @import("../util.zig");
 const verbose_mod = @import("../verbose.zig");
 const cost_mod = @import("../cost.zig");
 
+const context_gateway_mod = @import("../coding/context_gateway.zig");
+const context_request_gate_mod = @import("../coding/context_request_gate.zig");
+const context_stream_gate_mod = @import("../coding/context_stream_gate.zig");
+
 /// Optional adapter callback used to obtain a context-transformed request candidate.
 /// The runtime applies admission evidence and falls back to the original request otherwise.
 pub const ContextTransformCallback = *const fn (
@@ -40,9 +44,6 @@ pub const ContextTransformCallback = *const fn (
     allocator: std.mem.Allocator,
     original: providers.ChatRequest,
 ) anyerror!?context_request_gate_mod.Candidate;
-const context_gateway_mod = @import("../coding/context_gateway.zig");
-const context_request_gate_mod = @import("../coding/context_request_gate.zig");
-const context_stream_gate_mod = @import("../coding/context_stream_gate.zig");
 
 const cache = memory_mod.cache;
 pub const dispatcher = @import("dispatcher.zig");
@@ -2269,7 +2270,8 @@ pub const Agent = struct {
                     }),
                     turn_model_name,
                     self.temperature,
-                    context_stream_gate_mod.Gate.onChunk, &stream_gate,
+                    context_stream_gate_mod.Gate.onChunk,
+                    &stream_gate,
                 ) catch |err| retry_stream: {
                     const fail_duration: u64 = @as(u64, @intCast(@max(0, std_compat.time.milliTimestamp() - timer_start)));
                     self.recordLlmFailureEvent(turn_model_name, fail_duration, @errorName(err));
