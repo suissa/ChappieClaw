@@ -32,7 +32,17 @@ const SecurityPolicy = @import("../security/policy.zig").SecurityPolicy;
 const util = @import("../util.zig");
 const verbose_mod = @import("../verbose.zig");
 const cost_mod = @import("../cost.zig");
+
+/// Optional adapter callback used to obtain a context-transformed request candidate.
+/// The runtime applies admission evidence and falls back to the original request otherwise.
+pub const ContextTransformCallback = *const fn (
+    ctx: *anyopaque,
+    allocator: std.mem.Allocator,
+    original: providers.ChatRequest,
+) anyerror!?context_request_gate_mod.Candidate;
 const context_gateway_mod = @import("../coding/context_gateway.zig");
+const context_request_gate_mod = @import("../coding/context_request_gate.zig");
+const context_stream_gate_mod = @import("../coding/context_stream_gate.zig");
 
 const cache = memory_mod.cache;
 pub const dispatcher = @import("dispatcher.zig");
@@ -264,6 +274,9 @@ pub const Agent = struct {
     /// on `self.allocator`; redacted slices for each turn are allocated on the
     /// per-turn arena.
     redactor: ?*redaction.Redactor = null,
+    /// Optional provider-neutral context transformer adapter. Null preserves legacy behavior.
+    context_transformer: ?ContextTransformCallback = null,
+    context_transformer_ctx: ?*anyopaque = null,
     /// Optional session scope for memory read/write operations.
     memory_session_id: ?[]const u8 = null,
     observer: Observer,
@@ -641,6 +654,27 @@ pub const Agent = struct {
             .has_system_prompt = false,
             .last_turn_compacted = false,
         };
+    }
+
+    /// Install or clear an adapter that proposes a context-reduced provider request.
+    pub fn setContextTransformer(self: *Agent, callback: ?ContextTransformCallback, ctx: ?*anyopaque) void {
+        self.context_transformer = callback;
+        self.context_transformer_ctx = if (callback != null) ctx else null;
+    }
+
+    fn prepareContextRequest(
+        self: *Agent,
+        allocator: std.mem.Allocator,
+        gateway: *context_gateway_mod.Gateway(512),
+        request_id: u64,
+        intent_id: u128,
+        original: providers.ChatRequest,
+    ) !providers.ChatRequest {
+        const callback = self.context_transformer orelse return original;
+        const ctx = self.context_transformer_ctx orelse return original;
+        const candidate = callback(ctx, allocator, original) catch return original;
+        const admitted = try context_request_gate_mod.admit(gateway, request_id, intent_id, original, candidate);
+        return admitted.request;
     }
 
     pub fn deinit(self: *Agent) void {
@@ -2216,11 +2250,13 @@ pub const Agent = struct {
             var response_attempt: u32 = 1;
             providers.clearLastApiErrorDetail();
             if (is_streaming) {
+                var stream_gate = context_stream_gate_mod.Gate.init(arena, self.stream_callback.?, self.stream_ctx.?);
+                defer stream_gate.deinit();
                 self.recordLlmRequestEvent(turn_model_name, messages);
                 self.logLlmRequest(iteration + 1, 1, turn_model_name, messages, native_tools_enabled, true);
                 const stream_result = self.provider.streamChat(
                     self.allocator,
-                    .{
+                    try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
                         .messages = messages,
                         .session_id = self.memory_session_id,
                         .model = turn_model_name,
@@ -2230,11 +2266,10 @@ pub const Agent = struct {
                         .timeout_secs = self.message_timeout_secs,
                         .reasoning_effort = self.reasoning_effort,
                         .include_reasoning = include_reasoning,
-                    },
+                    }),
                     turn_model_name,
                     self.temperature,
-                    self.stream_callback.?,
-                    self.stream_ctx.?,
+                    context_stream_gate_mod.Gate.onChunk, &stream_gate,
                 ) catch |err| retry_stream: {
                     const fail_duration: u64 = @as(u64, @intCast(@max(0, std_compat.time.milliTimestamp() - timer_start)));
                     self.recordLlmFailureEvent(turn_model_name, fail_duration, @errorName(err));
@@ -2253,11 +2288,12 @@ pub const Agent = struct {
                             turn_max_tokens,
                         );
                         response_attempt = 2;
+                        stream_gate.reset();
                         self.recordLlmRequestEvent(turn_model_name, retry_msgs);
                         self.logLlmRequest(iteration + 1, 2, turn_model_name, retry_msgs, native_tools_enabled, true);
                         break :retry_stream self.provider.streamChat(
-                            self.allocator,
-                            .{
+                    self.allocator,
+                    try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
                                 .messages = retry_msgs,
                                 .session_id = self.memory_session_id,
                                 .model = turn_model_name,
@@ -2267,11 +2303,10 @@ pub const Agent = struct {
                                 .timeout_secs = self.message_timeout_secs,
                                 .reasoning_effort = self.reasoning_effort,
                                 .include_reasoning = include_reasoning,
-                            },
+                            }),
                             turn_model_name,
                             self.temperature,
-                            self.stream_callback.?,
-                            self.stream_ctx.?,
+                            context_stream_gate_mod.Gate.onChunk, &stream_gate,
                         ) catch |retry_err| {
                             if (turn_route_selection) |selection| try self.markRouteDegraded(selection, retry_err);
                             self.emitUsageFailure(turn_model_name);
@@ -2283,6 +2318,7 @@ pub const Agent = struct {
                     self.emitUsageFailure(turn_model_name);
                     return err;
                 };
+                try stream_gate.finish(&context_gateway, @as(u64, iteration) + 1, context_intent_id);
                 response = ChatResponse{
                     .content = stream_result.content,
                     .reasoning_content = stream_result.reasoning_content,
@@ -2295,7 +2331,7 @@ pub const Agent = struct {
                 self.logLlmRequest(iteration + 1, 1, turn_model_name, messages, native_tools_enabled, false);
                 response = self.provider.chat(
                     self.allocator,
-                    .{
+                    try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
                         .messages = messages,
                         .session_id = self.memory_session_id,
                         .model = turn_model_name,
@@ -2305,7 +2341,7 @@ pub const Agent = struct {
                         .timeout_secs = self.message_timeout_secs,
                         .reasoning_effort = self.reasoning_effort,
                         .include_reasoning = include_reasoning,
-                    },
+                    }),
                     turn_model_name,
                     self.temperature,
                 ) catch |err| retry_blk: {
@@ -2330,8 +2366,8 @@ pub const Agent = struct {
                         self.recordLlmRequestEvent(turn_model_name, retry_msgs);
                         self.logLlmRequest(iteration + 1, 2, turn_model_name, retry_msgs, native_tools_enabled, false);
                         break :retry_blk self.provider.chat(
-                            self.allocator,
-                            .{
+                    self.allocator,
+                    try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
                                 .messages = retry_msgs,
                                 .session_id = self.memory_session_id,
                                 .model = turn_model_name,
@@ -2341,7 +2377,7 @@ pub const Agent = struct {
                                 .timeout_secs = self.message_timeout_secs,
                                 .reasoning_effort = self.reasoning_effort,
                                 .include_reasoning = include_reasoning,
-                            },
+                            }),
                             turn_model_name,
                             self.temperature,
                         ) catch |retry_err| {
@@ -2369,8 +2405,8 @@ pub const Agent = struct {
                         self.recordLlmRequestEvent(turn_model_name, recovery_msgs);
                         self.logLlmRequest(iteration + 1, 2, turn_model_name, recovery_msgs, native_tools_enabled, false);
                         break :retry_blk self.provider.chat(
-                            self.allocator,
-                            .{
+                    self.allocator,
+                    try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
                                 .messages = recovery_msgs,
                                 .session_id = self.memory_session_id,
                                 .model = turn_model_name,
@@ -2380,7 +2416,7 @@ pub const Agent = struct {
                                 .timeout_secs = self.message_timeout_secs,
                                 .reasoning_effort = self.reasoning_effort,
                                 .include_reasoning = include_reasoning,
-                            },
+                            }),
                             turn_model_name,
                             self.temperature,
                         ) catch |retry_after_compact_err| {
@@ -2402,8 +2438,8 @@ pub const Agent = struct {
                     self.recordLlmRequestEvent(turn_model_name, messages);
                     self.logLlmRequest(iteration + 1, 2, turn_model_name, messages, native_tools_enabled, false);
                     break :retry_blk self.provider.chat(
-                        self.allocator,
-                        .{
+                    self.allocator,
+                    try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
                             .messages = messages,
                             .session_id = self.memory_session_id,
                             .model = turn_model_name,
@@ -2413,7 +2449,7 @@ pub const Agent = struct {
                             .timeout_secs = self.message_timeout_secs,
                             .reasoning_effort = self.reasoning_effort,
                             .include_reasoning = include_reasoning,
-                        },
+                        }),
                         turn_model_name,
                         self.temperature,
                     ) catch |retry_err| {
@@ -2432,8 +2468,8 @@ pub const Agent = struct {
                             self.recordLlmRequestEvent(turn_model_name, recovery_msgs);
                             self.logLlmRequest(iteration + 1, 3, turn_model_name, recovery_msgs, native_tools_enabled, false);
                             break :retry_blk self.provider.chat(
-                                self.allocator,
-                                .{
+                    self.allocator,
+                    try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
                                     .messages = recovery_msgs,
                                     .session_id = self.memory_session_id,
                                     .model = turn_model_name,
@@ -2443,7 +2479,7 @@ pub const Agent = struct {
                                     .timeout_secs = self.message_timeout_secs,
                                     .reasoning_effort = self.reasoning_effort,
                                     .include_reasoning = include_reasoning,
-                                },
+                                }),
                                 turn_model_name,
                                 self.temperature,
                             ) catch |retry_after_compact_err| {
@@ -2891,8 +2927,8 @@ pub const Agent = struct {
         self.recordLlmRequestEvent(self.model_name, send_summary_messages);
         self.logLlmRequest(self.max_tool_iterations + 1, 1, self.model_name, send_summary_messages, false, false);
         var summary_response = self.provider.chat(
-            self.allocator,
-            .{
+                    self.allocator,
+                    try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
                 .messages = send_summary_messages,
                 .session_id = self.memory_session_id,
                 .model = self.model_name,
@@ -2901,7 +2937,7 @@ pub const Agent = struct {
                 .tools = null, // force text-only
                 .timeout_secs = self.message_timeout_secs,
                 .reasoning_effort = self.reasoning_effort,
-            },
+            }),
             self.model_name,
             self.temperature,
         ) catch |err| {
