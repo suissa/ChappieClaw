@@ -44,7 +44,7 @@ pub fn admit(
     const validation = gateway_mod.Validation{
         .lossless = c.lossless,
         .coverage_complete = c.coverage_complete,
-        .policy_allowed = c.policy_allowed,
+        .policy_allowed = c.policy_allowed and requestMetadataCompatible(original, c.request),
         .cache_compatible = c.cache_compatible,
         .original_tokens = c.original_tokens,
         .candidate_tokens = c.candidate_tokens,
@@ -67,6 +67,38 @@ pub fn admit(
         return .{ .request = original, .transformed = false };
     }
     return .{ .request = c.request, .transformed = true };
+}
+
+fn optionalStringEqual(a: ?[]const u8, b: ?[]const u8) bool {
+    if (a == null or b == null) return a == null and b == null;
+    return std.mem.eql(u8, a.?, b.?);
+}
+
+fn toolsEqual(a: ?[]const providers.ToolSpec, b: ?[]const providers.ToolSpec) bool {
+    if (a == null or b == null) return a == null and b == null;
+    if (a.?.len != b.?.len) return false;
+    for (a.?, b.?) |left, right| {
+        if (!std.mem.eql(u8, left.name, right.name) or
+            !std.mem.eql(u8, left.description, right.description) or
+            !std.mem.eql(u8, left.parameters_json, right.parameters_json))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// A context condenser may replace messages, but cannot silently change provider,
+/// model, tools, budgets, cache/session scope, or generation behavior.
+fn requestMetadataCompatible(original: providers.ChatRequest, candidate: providers.ChatRequest) bool {
+    return std.mem.eql(u8, original.model, candidate.model) and
+        optionalStringEqual(original.session_id, candidate.session_id) and
+        @as(u64, @bitCast(original.temperature)) == @as(u64, @bitCast(candidate.temperature)) and
+        original.max_tokens == candidate.max_tokens and
+        original.timeout_secs == candidate.timeout_secs and
+        optionalStringEqual(original.reasoning_effort, candidate.reasoning_effort) and
+        original.include_reasoning == candidate.include_reasoning and
+        toolsEqual(original.tools, candidate.tools);
 }
 
 fn fingerprintMarker(allocator: std.mem.Allocator, request: providers.ChatRequest, size: usize) ![]u8 {
@@ -174,4 +206,31 @@ test "typed request gate accepts a proven strict reduction" {
     const result = try admit(&gateway, 2, 3, original, candidate);
     try std.testing.expect(result.transformed);
     try std.testing.expectEqualStrings("short", result.request.messages[0].content);
+}
+
+test "typed request gate rejects candidates that alter provider metadata" {
+    var gateway = gateway_mod.Gateway(8){};
+    const original = providers.ChatRequest{
+        .messages = &.{providers.ChatMessage.user("a long context")},
+        .model = "model",
+        .temperature = 0.2,
+        .max_tokens = 512,
+    };
+    const candidate = Candidate{
+        .request = .{
+            .messages = &.{providers.ChatMessage.user("short")},
+            .model = "different-model",
+            .temperature = 0.2,
+            .max_tokens = 512,
+        },
+        .original_tokens = 20,
+        .candidate_tokens = 5,
+        .lossless = true,
+        .coverage_complete = true,
+        .policy_allowed = true,
+        .cache_compatible = true,
+    };
+    const result = try admit(&gateway, 3, 4, original, candidate);
+    try std.testing.expect(!result.transformed);
+    try std.testing.expectEqualStrings("model", result.request.model);
 }
