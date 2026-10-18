@@ -38,10 +38,8 @@ pub fn admit(
     candidate: ?Candidate,
 ) !Admission {
     const c = candidate orelse return .{ .request = original, .transformed = false };
-    const original_fingerprint = fingerprintRequest(original);
-    const candidate_fingerprint = fingerprintRequest(c.request);
-    _ = original_fingerprint;
-    _ = candidate_fingerprint;
+    const original_bytes = requestSize(original);
+    const candidate_bytes = requestSize(c.request);
 
     const validation = gateway_mod.Validation{
         .lossless = c.lossless,
@@ -52,21 +50,14 @@ pub fn admit(
         .candidate_tokens = c.candidate_tokens,
     };
 
-    // Gateway remains the single admission authority. The byte comparison is
-    // represented by canonical request fingerprints; token reduction is strict.
-    const original_bytes = requestSize(original);
-    const candidate_bytes = requestSize(c.request);
-    const accepted = validation.lossless and
-        validation.coverage_complete and
-        validation.policy_allowed and
-        validation.cache_compatible and
-        candidate_bytes < original_bytes and
-        c.candidate_tokens < c.original_tokens;
-
-    const original_marker = std.fmt.allocPrint(std.heap.page_allocator, "{x}:{d}", .{ original_fingerprint, original_bytes }) catch return error.OutOfMemory;
+    const original_marker_len = @max(@as(usize, 1), original_bytes);
+    const candidate_marker_len = @max(@as(usize, 1), candidate_bytes);
+    const original_marker = try std.heap.page_allocator.alloc(u8, original_marker_len);
     defer std.heap.page_allocator.free(original_marker);
-    const candidate_marker = std.fmt.allocPrint(std.heap.page_allocator, "{x}:{d}", .{ candidate_fingerprint, candidate_bytes }) catch return error.OutOfMemory;
+    const candidate_marker = try std.heap.page_allocator.alloc(u8, candidate_marker_len);
     defer std.heap.page_allocator.free(candidate_marker);
+    @memset(original_marker, 0);
+    @memset(candidate_marker, 0);
 
     const admitted = try gateway.beforeInference(
         intent_id,
@@ -75,10 +66,10 @@ pub fn admit(
         validation,
     );
 
-    if (!accepted or admitted.decision != .transformed) {
+    _ = request_id;
+    if (admitted.decision != .transformed) {
         return .{ .request = original, .transformed = false };
     }
-    _ = request_id;
     return .{ .request = c.request, .transformed = true };
 }
 
@@ -105,21 +96,6 @@ fn requestSize(request: providers.ChatRequest) usize {
     return size;
 }
 
-fn fingerprintRequest(request: providers.ChatRequest) u64 {
-    var hash: u64 = 0xcbf29ce484222325;
-    for (request.messages) |message| {
-        hash ^= @intFromEnum(message.role);
-        hash *%= 0x100000001b3;
-        for (message.content) |byte| {
-            hash ^= byte;
-            hash *%= 0x100000001b3;
-        }
-        if (message.name) |name| for (name) |byte| { hash ^= byte; hash *%= 0x100000001b3; };
-        if (message.tool_call_id) |id| for (id) |byte| { hash ^= byte; hash *%= 0x100000001b3; };
-    }
-    return hash;
-}
-
 test "typed request gate rejects unproven candidates" {
     var gateway = gateway_mod.Gateway(8){};
     const original = providers.ChatRequest{
@@ -137,7 +113,7 @@ test "typed request gate rejects unproven candidates" {
     };
     const result = try admit(&gateway, 1, 2, original, candidate);
     try std.testing.expect(!result.transformed);
-    try std.testing.expectEqual(original.messages[0].content, result.request.messages[0].content);
+    try std.testing.expectEqualStrings(original.messages[0].content, result.request.messages[0].content);
 }
 
 test "typed request gate accepts a proven strict reduction" {
