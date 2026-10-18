@@ -12,6 +12,7 @@ pub const healing = @import("coding/healing.zig");
 pub const lineage = @import("coding/lineage.zig");
 pub const acp = @import("coding/acp.zig");
 pub const safety = @import("coding/safety.zig");
+pub const context_gateway = @import("coding/context_gateway.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
