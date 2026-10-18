@@ -2292,8 +2292,8 @@ pub const Agent = struct {
                         self.recordLlmRequestEvent(turn_model_name, retry_msgs);
                         self.logLlmRequest(iteration + 1, 2, turn_model_name, retry_msgs, native_tools_enabled, true);
                         break :retry_stream self.provider.streamChat(
-                    self.allocator,
-                    try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
+                            self.allocator,
+                            try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
                                 .messages = retry_msgs,
                                 .session_id = self.memory_session_id,
                                 .model = turn_model_name,
@@ -2366,8 +2366,8 @@ pub const Agent = struct {
                         self.recordLlmRequestEvent(turn_model_name, retry_msgs);
                         self.logLlmRequest(iteration + 1, 2, turn_model_name, retry_msgs, native_tools_enabled, false);
                         break :retry_blk self.provider.chat(
-                    self.allocator,
-                    try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
+                            self.allocator,
+                            try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
                                 .messages = retry_msgs,
                                 .session_id = self.memory_session_id,
                                 .model = turn_model_name,
@@ -2405,8 +2405,8 @@ pub const Agent = struct {
                         self.recordLlmRequestEvent(turn_model_name, recovery_msgs);
                         self.logLlmRequest(iteration + 1, 2, turn_model_name, recovery_msgs, native_tools_enabled, false);
                         break :retry_blk self.provider.chat(
-                    self.allocator,
-                    try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
+                            self.allocator,
+                            try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
                                 .messages = recovery_msgs,
                                 .session_id = self.memory_session_id,
                                 .model = turn_model_name,
@@ -2438,8 +2438,8 @@ pub const Agent = struct {
                     self.recordLlmRequestEvent(turn_model_name, messages);
                     self.logLlmRequest(iteration + 1, 2, turn_model_name, messages, native_tools_enabled, false);
                     break :retry_blk self.provider.chat(
-                    self.allocator,
-                    try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
+                        self.allocator,
+                        try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
                             .messages = messages,
                             .session_id = self.memory_session_id,
                             .model = turn_model_name,
@@ -2468,8 +2468,8 @@ pub const Agent = struct {
                             self.recordLlmRequestEvent(turn_model_name, recovery_msgs);
                             self.logLlmRequest(iteration + 1, 3, turn_model_name, recovery_msgs, native_tools_enabled, false);
                             break :retry_blk self.provider.chat(
-                    self.allocator,
-                    try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
+                                self.allocator,
+                                try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
                                     .messages = recovery_msgs,
                                     .session_id = self.memory_session_id,
                                     .model = turn_model_name,
@@ -2927,8 +2927,8 @@ pub const Agent = struct {
         self.recordLlmRequestEvent(self.model_name, send_summary_messages);
         self.logLlmRequest(self.max_tool_iterations + 1, 1, self.model_name, send_summary_messages, false, false);
         var summary_response = self.provider.chat(
-                    self.allocator,
-                    try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
+            self.allocator,
+            try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
                 .messages = send_summary_messages,
                 .session_id = self.memory_session_id,
                 .model = self.model_name,
