@@ -219,7 +219,7 @@ test "typed request gate rejects candidates that alter provider metadata" {
     const candidate = Candidate{
         .request = .{
             .messages = &.{providers.ChatMessage.user("short")},
-            .model = "different-model",
+            .model = "m",
             .temperature = 0.2,
             .max_tokens = 512,
         },
