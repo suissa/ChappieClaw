@@ -295,6 +295,53 @@ test "block key is deterministic and content-sensitive" {
     try std.testing.expect(!std.mem.eql(u8, &first, &different));
 }
 
+test "proof gate rejects missing coverage and verifier failures" {
+    const Fake = struct {
+        fn abi() callconv(.c) u32 { return ffi.expected_abi_version; }
+        fn nullBytes(_: [*]const u8, _: usize, _: *usize) callconv(.c) ?[*]u8 { return null; }
+        fn nullSession(_: [*]const u8, _: usize) callconv(.c) ?*anyopaque { return null; }
+        fn noSession(_: ?*anyopaque) callconv(.c) void {}
+        fn nullRewrite(_: ?*anyopaque, _: [*]const u8, _: usize, _: *usize) callconv(.c) ?[*]u8 { return null; }
+        fn noFree(_: ?[*]u8, _: usize) callconv(.c) void {}
+    };
+    const api = ffi.Api{
+        .abiVersion = Fake.abi,
+        .compress = Fake.nullBytes,
+        .verify = Fake.nullBytes,
+        .sessionNew = Fake.nullSession,
+        .sessionFree = Fake.noSession,
+        .rewrite = Fake.nullRewrite,
+        .free = Fake.noFree,
+    };
+    var session = ffi.Session{ .api = api, .handle = null };
+    const allocator = std.testing.allocator;
+    const original = "{\"model\":\"m\",\"messages\":[{\"role\":\"tool\",\"content\":\"original\"}]}";
+    const candidate = "{\"model\":\"m\",\"messages\":[{\"role\":\"tool\",\"content\":\"wire\"}]}";
+
+    var missing = try std.json.parseFromSlice(std.json.Value, allocator, "{\"blocks_rewritten\":1}", .{});
+    defer missing.deinit();
+    try std.testing.expect(!try verifyRewriteProofs(allocator, &session, missing.value, original, candidate));
+
+    var incomplete = try std.json.parseFromSlice(std.json.Value, allocator, "{\"blocks_rewritten\":1,\"proofs\":[]}", .{});
+    defer incomplete.deinit();
+    try std.testing.expect(!try verifyRewriteProofs(allocator, &session, incomplete.value, original, candidate));
+
+    const key = blockKey("original");
+    const stats_json = try std.json.Stringify.valueAlloc(allocator, .{
+        .blocks_rewritten = 1,
+        .proofs = .{.{
+            .path = "/messages/0/content",
+            .key = key[0..],
+            .wire = "wire",
+            .hash = "fake-certificate",
+        }},
+    }, .{});
+    defer allocator.free(stats_json);
+    var invalid = try std.json.parseFromSlice(std.json.Value, allocator, stats_json, .{});
+    defer invalid.deinit();
+    try std.testing.expect(!try verifyRewriteProofs(allocator, &session, invalid.value, original, candidate));
+}
+
 test "request diff permits only tool result content changes" {
     const allocator = std.testing.allocator;
     const original = "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"keep\"},{\"role\":\"tool\",\"content\":\"long\"}]}";
