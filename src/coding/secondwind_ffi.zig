@@ -119,10 +119,10 @@ fn parseVerificationResult(allocator: std.mem.Allocator, output_json: []const u8
 
 test "verification response must contain a boolean ok field" {
     const allocator = std.testing.allocator;
-    try std.testing.expect(try parseVerificationResult(allocator, "{\\"ok\\":true}"));
-    try std.testing.expect(!(try parseVerificationResult(allocator, "{\\"ok\\":false}")));
+    try std.testing.expect(try parseVerificationResult(allocator, "{\"ok\":true}"));
+    try std.testing.expect(!(try parseVerificationResult(allocator, "{\"ok\":false}")));
     try std.testing.expectError(error.InvalidSecondwindVerificationResponse, parseVerificationResult(allocator, "{}"));
-    try std.testing.expectError(error.InvalidSecondwindVerificationResponse, parseVerificationResult(allocator, "{\\"ok\\":1}"));
+    try std.testing.expectError(error.InvalidSecondwindVerificationResponse, parseVerificationResult(allocator, "{\"ok\":1}"));
     try std.testing.expectError(error.InvalidSecondwindVerificationResponse, parseVerificationResult(allocator, "not-json"));
 }
 test "rejects an ABI version mismatch before using the library" {
