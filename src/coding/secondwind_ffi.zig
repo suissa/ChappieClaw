@@ -157,7 +157,6 @@ fn testRewrite(_: ?*anyopaque, _: [*]const u8, _: usize, _: *usize) callconv(.c)
 }
 fn testFree(_: ?[*]u8, _: usize) callconv(.c) void {}
 
-
 /// Owns an explicitly opened shared library and the resolved secondwind ABI.
 /// Keep this value alive until every Session created from `api` has been deinitialized.
 /// The loader never searches implicit paths or loads a library automatically.
