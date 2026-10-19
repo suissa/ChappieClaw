@@ -1,9 +1,8 @@
 //! Thin, opt-in binding to secondwind's versioned C ABI.
 //!
-//! This module deliberately accepts an injected symbol table instead of linking
-//! secondwind by default. The host is responsible for loading the matching native
-//! library and passing its exported functions. No transformation is enabled unless
-//! an application explicitly creates a Session and calls rewriteJson.
+//! The API can be injected by a host or resolved from an explicitly opened shared
+//! library with LoadedLibrary.open. No library is loaded and no transformation is
+//! enabled by default; applications must opt in and close sessions before the library.
 //!
 //! Pinned contract: secondwind C ABI v1 (workspace/package version 0.3.2).
 //! JSON payloads are UTF-8. Buffers returned by the ABI belong to secondwind and
@@ -128,3 +127,48 @@ fn testRewrite(_: ?*anyopaque, _: [*]const u8, _: usize, _: *usize) callconv(.c)
     return null;
 }
 fn testFree(_: ?[*]u8, _: usize) callconv(.c) void {}
+
+
+/// Owns an explicitly opened shared library and the resolved secondwind ABI.
+/// Keep this value alive until every Session created from `api` has been deinitialized.
+/// The loader never searches implicit paths or loads a library automatically.
+pub const LoadedLibrary = struct {
+    library: std.DynLib,
+    api: Api,
+
+    pub fn open(path: []const u8) !LoadedLibrary {
+        var library = try std.DynLib.open(path);
+        errdefer library.close();
+
+        const abi_version = library.lookup(*const fn () callconv(.c) u32, "sw_abi_version") orelse
+            return error.SecondwindMissingAbiVersion;
+        const compress = library.lookup(@TypeOf(@as(Api, undefined).compress), "sw_compress") orelse
+            return error.SecondwindMissingCompress;
+        const verify = library.lookup(@TypeOf(@as(Api, undefined).verify), "sw_verify") orelse
+            return error.SecondwindMissingVerify;
+        const session_new = library.lookup(@TypeOf(@as(Api, undefined).sessionNew), "sw_session_new") orelse
+            return error.SecondwindMissingSessionNew;
+        const session_free = library.lookup(@TypeOf(@as(Api, undefined).sessionFree), "sw_session_free") orelse
+            return error.SecondwindMissingSessionFree;
+        const rewrite = library.lookup(@TypeOf(@as(Api, undefined).rewrite), "sw_rewrite") orelse
+            return error.SecondwindMissingRewrite;
+        const free = library.lookup(@TypeOf(@as(Api, undefined).free), "sw_free") orelse
+            return error.SecondwindMissingFree;
+
+        const api = Api{
+            .abiVersion = abi_version,
+            .compress = compress,
+            .verify = verify,
+            .sessionNew = session_new,
+            .sessionFree = session_free,
+            .rewrite = rewrite,
+            .free = free,
+        };
+        try api.validate();
+        return .{ .library = library, .api = api };
+    }
+
+    pub fn close(self: *LoadedLibrary) void {
+        self.library.close();
+    }
+};
