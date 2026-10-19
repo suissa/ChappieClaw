@@ -2930,7 +2930,7 @@ pub const Agent = struct {
         self.logLlmRequest(self.max_tool_iterations + 1, 1, self.model_name, send_summary_messages, false, false);
         var summary_response = self.provider.chat(
             self.allocator,
-            try self.prepareContextRequest(arena, &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
+            try self.prepareContextRequest(summary_arena.allocator(), &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
                 .messages = send_summary_messages,
                 .session_id = self.memory_session_id,
                 .model = self.model_name,
