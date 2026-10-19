@@ -170,7 +170,9 @@ fn requestSize(request: providers.ChatRequest) usize {
 }
 
 test "audit fingerprint marker remains fixed-size for large request content" {
-    const huge = "x" ** 1_000_000;
+    const huge = try std.testing.allocator.alloc(u8, 1_000_000);
+    defer std.testing.allocator.free(huge);
+    @memset(huge, 'x');
     const request = providers.ChatRequest{
         .messages = &.{providers.ChatMessage.user(huge)},
         .model = "model",
@@ -190,7 +192,9 @@ test "audit fingerprint changes when request content changes" {
         .model = "model",
     };
 
-    try std.testing.expect(!std.mem.eql(u8, &fingerprintMarker(first), &fingerprintMarker(second)));
+    const first_marker = fingerprintMarker(first);
+    const second_marker = fingerprintMarker(second);
+    try std.testing.expect(!std.mem.eql(u8, &first_marker, &second_marker));
 }
 
 test "typed request gate rejects unproven candidates" {
