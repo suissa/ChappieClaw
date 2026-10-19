@@ -101,7 +101,11 @@ fn eligibleMessageChangesOnly(original: providers.ChatRequest, candidate: provid
         {
             return false;
         }
-        if (before.role != .tool and !std.mem.eql(u8, before.content, after.content)) return false;
+        if ((before.role != .tool or before.content_parts != null) and
+            !std.mem.eql(u8, before.content, after.content))
+        {
+            return false;
+        }
     }
     return true;
 }
