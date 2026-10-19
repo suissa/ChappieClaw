@@ -61,12 +61,19 @@ const WireMessage = struct {
     tool_call_id: ?[]const u8 = null,
 };
 
+const WireTool = struct {
+    name: []const u8,
+    description: []const u8,
+    parameters_json: []const u8,
+};
+
 const WireRequest = struct {
     messages: []const WireMessage,
     session_id: ?[]const u8 = null,
     model: []const u8,
     temperature: f64,
     max_tokens: ?u32 = null,
+    tools: ?[]const WireTool = null,
     timeout_secs: u64 = 0,
     reasoning_effort: ?[]const u8 = null,
     include_reasoning: ?bool = null,
@@ -81,12 +88,25 @@ fn serializeRequest(allocator: std.mem.Allocator, request: providers.ChatRequest
     for (request.messages, 0..) |message, i| {
         messages[i] = .{ .role = message.role.toSlice(), .content = message.content, .name = message.name, .tool_call_id = message.tool_call_id };
     }
+    var tools: ?[]WireTool = null;
+    defer if (tools) |items| allocator.free(items);
+    if (request.tools) |source| {
+        tools = try allocator.alloc(WireTool, source.len);
+        for (source, 0..) |tool, i| {
+            tools.?[i] = .{
+                .name = tool.name,
+                .description = tool.description,
+                .parameters_json = tool.parameters_json,
+            };
+        }
+    }
     const wire = WireRequest{
         .messages = messages,
         .session_id = request.session_id,
         .model = request.model,
         .temperature = request.temperature,
         .max_tokens = request.max_tokens,
+        .tools = tools,
         .timeout_secs = request.timeout_secs,
         .reasoning_effort = request.reasoning_effort,
         .include_reasoning = request.include_reasoning,
@@ -113,12 +133,26 @@ fn deserializeRequest(allocator: std.mem.Allocator, json: []const u8) !providers
             .tool_call_id = try duplicateOptional(allocator, value.object.get("tool_call_id")),
         };
     }
+    var tools: ?[]providers.ToolSpec = null;
+    if (parsed.value.object.get("tools")) |tools_value| {
+        if (tools_value != .array) return error.InvalidSecondwindRequest;
+        tools = try allocator.alloc(providers.ToolSpec, tools_value.array.items.len);
+        for (tools_value.array.items, 0..) |value, i| {
+            if (value != .object) return error.InvalidSecondwindRequest;
+            tools.?[i] = .{
+                .name = try duplicateRequired(allocator, value.object.get("name")),
+                .description = try duplicateRequired(allocator, value.object.get("description")),
+                .parameters_json = try duplicateRequired(allocator, value.object.get("parameters_json")),
+            };
+        }
+    }
     return .{
         .messages = messages,
         .session_id = try duplicateOptional(allocator, parsed.value.object.get("session_id")),
         .model = try duplicateRequired(allocator, parsed.value.object.get("model")),
         .temperature = numberOrDefault(parsed.value.object.get("temperature"), 0.7),
         .max_tokens = uintOrNull(parsed.value.object.get("max_tokens")),
+        .tools = if (tools) |items| items else null,
         .timeout_secs = uintOrDefault(parsed.value.object.get("timeout_secs"), 0),
         .reasoning_effort = try duplicateOptional(allocator, parsed.value.object.get("reasoning_effort")),
         .include_reasoning = boolOrNull(parsed.value.object.get("include_reasoning")),
@@ -158,7 +192,17 @@ test "wire adapter declines multimodal requests" {
 }
 
 test "wire adapter round trips supported request metadata" {
-    const request = providers.ChatRequest{ .messages = &.{providers.ChatMessage.user("x")}, .session_id = "session", .model = "m", .temperature = 0.2, .max_tokens = 42, .timeout_secs = 9, .reasoning_effort = "low", .include_reasoning = true };
+    const request = providers.ChatRequest{
+        .messages = &.{providers.ChatMessage.user("x")},
+        .session_id = "session",
+        .model = "m",
+        .temperature = 0.2,
+        .max_tokens = 42,
+        .tools = &.{.{ .name = "lookup", .description = "look up data", .parameters_json = "{\\"type\\":\\"object\\"}" }},
+        .timeout_secs = 9,
+        .reasoning_effort = "low",
+        .include_reasoning = true,
+    };
     const json = try serializeRequest(std.testing.allocator, request);
     defer std.testing.allocator.free(json);
     const decoded = try deserializeRequest(std.testing.allocator, json);
@@ -167,4 +211,7 @@ test "wire adapter round trips supported request metadata" {
     try std.testing.expectEqualStrings("m", decoded.model);
     try std.testing.expectEqual(@as(u32, 42), decoded.max_tokens.?);
     try std.testing.expectEqual(@as(u64, 9), decoded.timeout_secs);
+    try std.testing.expectEqual(@as(usize, 1), decoded.tools.?.len);
+    try std.testing.expectEqualStrings("lookup", decoded.tools.?[0].name);
+    try std.testing.expectEqualStrings("{\\"type\\":\\"object\\"}", decoded.tools.?[0].parameters_json);
 }
