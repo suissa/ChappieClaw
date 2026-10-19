@@ -71,7 +71,7 @@ pub fn Gateway(comptime capacity: usize) type {
     return struct {
         const Self = @This();
 
-        records: [capacity]Record = undefined,
+        records: [if (capacity == 0) 1 else capacity]Record = undefined,
         len: usize = 0,
         next_sequence: u64 = 1,
         next_request_id: u64 = 1,
