@@ -55,7 +55,10 @@ test "stream gate buffers deltas and emits only after validation" {
         finals: usize = 0,
         fn callback(ctx: *anyopaque, chunk: providers.StreamChunk) void {
             const self: *@This() = @ptrCast(@alignCast(ctx));
-            if (chunk.is_final) self.finals += 1 else { self.chunks += 1; self.text_len += chunk.delta.len; }
+            if (chunk.is_final) self.finals += 1 else {
+                self.chunks += 1;
+                self.text_len += chunk.delta.len;
+            }
         }
     };
     var state = State{};
