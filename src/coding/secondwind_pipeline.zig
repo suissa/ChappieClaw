@@ -57,15 +57,15 @@ pub fn rewriteCandidate(
     const saved = stats_value.object.get("tokens_saved") orelse return passthrough(allocator, original_json);
     if (saved != .integer or saved.integer <= 0) return passthrough(allocator, original_json);
 
+    const candidate_json = try std.json.Stringify.valueAlloc(allocator, rewritten_value, .{});
+    defer allocator.free(candidate_json);
+
     // The native response must prove every block it reports as rewritten. Stats and
     // token savings are accounting, not evidence; missing, malformed, incomplete, or
     // invalid per-block certificates make the entire candidate ineligible.
     if (!try verifyRewriteProofs(allocator, session, stats_value, original_json, candidate_json)) {
         return passthrough(allocator, original_json);
     }
-
-    const candidate_json = try std.json.Stringify.valueAlloc(allocator, rewritten_value, .{});
-    defer allocator.free(candidate_json);
     if (!try onlyToolOutputContentChanged(allocator, original_json, candidate_json)) {
         return passthrough(allocator, original_json);
     }
