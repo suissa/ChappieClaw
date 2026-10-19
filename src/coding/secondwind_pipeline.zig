@@ -57,6 +57,13 @@ pub fn rewriteCandidate(
     const saved = stats_value.object.get("tokens_saved") orelse return passthrough(allocator, original_json);
     if (saved != .integer or saved.integer <= 0) return passthrough(allocator, original_json);
 
+    // The native response must prove every block it reports as rewritten. Stats and
+    // token savings are accounting, not evidence; missing, malformed, incomplete, or
+    // invalid per-block certificates make the entire candidate ineligible.
+    if (!try verifyRewriteProofs(allocator, session, stats_value)) {
+        return passthrough(allocator, original_json);
+    }
+
     const candidate_json = try std.json.Stringify.valueAlloc(allocator, rewritten_value, .{});
     defer allocator.free(candidate_json);
     if (!try onlyToolOutputContentChanged(allocator, original_json, candidate_json)) {
@@ -68,6 +75,35 @@ pub fn rewriteCandidate(
         .transformed = true,
         .stats_json = try std.json.Stringify.valueAlloc(allocator, stats_value, .{}),
     };
+}
+
+
+/// Verify every emitted proof through the independently callable Secondwind verifier.
+/// Proof coverage must equal blocks_rewritten; policy, cache, and request-shape checks
+/// remain separate Context Gateway evidence and are not inferred from these certificates.
+fn verifyRewriteProofs(
+    allocator: std.mem.Allocator,
+    session: *ffi.Session,
+    stats: std.json.Value,
+) !bool {
+    if (stats != .object) return false;
+    const rewritten_count = stats.object.get("blocks_rewritten") orelse return false;
+    if (rewritten_count != .integer or rewritten_count.integer <= 0) return false;
+    const proofs_value = stats.object.get("proofs") orelse return false;
+    if (proofs_value != .array) return false;
+    if (proofs_value.array.items.len != rewritten_count.integer) return false;
+
+    for (proofs_value.array.items) |proof| {
+        if (proof != .object) return false;
+        const wire_value = proof.object.get("wire") orelse return false;
+        const hash_value = proof.object.get("hash") orelse return false;
+        const key_value = proof.object.get("key") orelse return false;
+        if (wire_value != .string or hash_value != .string or key_value != .string) return false;
+        if (wire_value.string.len == 0 or hash_value.string.len == 0 or key_value.string.len == 0) return false;
+        const verified = session.api.verifyWire(allocator, wire_value.string, hash_value.string) catch return false;
+        if (!verified) return false;
+    }
+    return true;
 }
 
 /// Runs secondwind and returns either the admitted candidate or the byte-identical
