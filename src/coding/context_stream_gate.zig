@@ -13,6 +13,7 @@ pub const Gate = struct {
     downstream: providers.StreamCallback,
     downstream_ctx: *anyopaque,
     buffer: std.ArrayListUnmanaged(u8) = .empty,
+    failed: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, downstream: providers.StreamCallback, downstream_ctx: *anyopaque) Gate {
         return .{ .allocator = allocator, .downstream = downstream, .downstream_ctx = downstream_ctx };
@@ -21,11 +22,21 @@ pub const Gate = struct {
     /// Provider callback. Never forwards a partial delta.
     pub fn onChunk(ctx: *anyopaque, chunk: providers.StreamChunk) void {
         const self: *Gate = @ptrCast(@alignCast(ctx));
-        self.buffer.appendSlice(self.allocator, chunk.delta) catch {};
+        if (self.failed) return;
+        self.buffer.appendSlice(self.allocator, chunk.delta) catch {
+            self.failed = true;
+        };
+    }
+
+    /// Discard buffered data from a failed provider attempt before retrying.
+    pub fn reset(self: *Gate) void {
+        self.buffer.clearRetainingCapacity();
+        self.failed = false;
     }
 
     /// Validate and publish the complete response exactly once.
     pub fn finish(self: *Gate, gateway: anytype, request_id: u64, intent_id: u128) !void {
+        if (self.failed) return error.OutOfMemory;
         const admitted = try gateway.beforeReturn(request_id, intent_id, self.buffer.items, .text, true, false);
         if (admitted.decision == .reject) return error.ContextGatewayRejected;
         if (admitted.bytes.len > 0) self.downstream(self.downstream_ctx, providers.StreamChunk.textDelta(admitted.bytes));
