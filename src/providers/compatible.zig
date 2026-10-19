@@ -4,6 +4,11 @@ const root = @import("root.zig");
 const sse = @import("sse.zig");
 const error_classify = @import("error_classify.zig");
 const text_helpers = @import("text_helpers.zig");
+const secondwind_ffi = @import("../coding/secondwind_ffi.zig");
+const secondwind_pipeline = @import("../coding/secondwind_pipeline.zig");
+const context_gateway = @import("../coding/context_gateway.zig");
+
+const SecondwindGateway = context_gateway.Gateway(256);
 
 const Provider = root.Provider;
 const ChatMessage = root.ChatMessage;
@@ -225,6 +230,14 @@ pub const OpenAiCompatibleProvider = struct {
     max_streaming_prompt_bytes: ?usize = null,
     /// Optional compact JSON string of additional key-value pairs to merge into request bodies.
     extra_body_params: ?[]const u8 = null,
+    /// Explicit opt-in Secondwind request rewriting. The host owns the session,
+    /// gateway, and loaded library for at least as long as this provider is used.
+    /// Null defaults preserve the exact legacy provider path.
+    secondwind_session: ?*secondwind_ffi.Session = null,
+    secondwind_gateway: ?*SecondwindGateway = null,
+    secondwind_intent_id: u128 = 0,
+    secondwind_policy_allowed: bool = false,
+    secondwind_cache_compatible: bool = false,
     allocator: std.mem.Allocator,
 
     const think_open_tag = "<think>";
@@ -1181,6 +1194,31 @@ pub const OpenAiCompatibleProvider = struct {
         allocator.free(messages);
     }
 
+
+    /// Apply verified Secondwind rewriting only when the host explicitly wires
+    /// both a live session and Context Gateway. Every failure is fail-closed.
+    fn rewriteBodyWithSecondwind(
+        self: *OpenAiCompatibleProvider,
+        allocator: std.mem.Allocator,
+        body: []const u8,
+        model: []const u8,
+    ) ![]u8 {
+        const session = self.secondwind_session orelse return allocator.dupe(u8, body);
+        const gateway = self.secondwind_gateway orelse return allocator.dupe(u8, body);
+        var result = secondwind_pipeline.rewriteVerifiedForInference(
+            allocator,
+            session,
+            gateway,
+            self.secondwind_intent_id,
+            body,
+            model,
+            self.secondwind_policy_allowed,
+            self.secondwind_cache_compatible,
+        ) catch return allocator.dupe(u8, body);
+        defer result.deinit(allocator);
+        return allocator.dupe(u8, result.request_json);
+    }
+
     fn streamChatImpl(
         ptr: *anyopaque,
         allocator: std.mem.Allocator,
@@ -1211,7 +1249,7 @@ pub const OpenAiCompatibleProvider = struct {
         const url = try self.chatCompletionsUrl(allocator);
         defer allocator.free(url);
 
-        const body = try buildStreamingChatRequestBody(
+        const serialized_body = try buildStreamingChatRequestBody(
             allocator,
             request,
             effective_model,
@@ -1224,6 +1262,8 @@ pub const OpenAiCompatibleProvider = struct {
             request.session_id,
             self.extra_body_params,
         );
+        defer allocator.free(serialized_body);
+        const body = try self.rewriteBodyWithSecondwind(allocator, serialized_body, effective_model);
         defer allocator.free(body);
 
         const auth = try self.authHeaderValue(allocator);
@@ -1444,7 +1484,7 @@ pub const OpenAiCompatibleProvider = struct {
         const url = try self.chatCompletionsUrl(allocator);
         defer allocator.free(url);
 
-        const body = try buildChatRequestBody(
+        const serialized_body = try buildChatRequestBody(
             allocator,
             capped_request,
             effective_model,
@@ -1457,6 +1497,8 @@ pub const OpenAiCompatibleProvider = struct {
             capped_request.session_id,
             self.extra_body_params,
         );
+        defer allocator.free(serialized_body);
+        const body = try self.rewriteBodyWithSecondwind(allocator, serialized_body, effective_model);
         defer allocator.free(body);
 
         const auth = try self.authHeaderValue(allocator);
