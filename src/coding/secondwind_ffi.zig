@@ -9,6 +9,7 @@
 //! must be released exactly once with sw_free(pointer, length).
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const expected_abi_version: u32 = 1;
 pub const max_response_bytes: usize = 16 * 1024 * 1024;
@@ -132,8 +133,20 @@ fn testFree(_: ?[*]u8, _: usize) callconv(.c) void {}
 /// Owns an explicitly opened shared library and the resolved secondwind ABI.
 /// Keep this value alive until every Session created from `api` has been deinitialized.
 /// The loader never searches implicit paths or loads a library automatically.
+const DynamicLibrary = if (builtin.os.tag == .windows) struct {
+    // Zig 0.16 removed std.DynLib's Windows backend. Keep the module compilable
+    // on Windows and require the host to inject an OS-specific symbol resolver.
+    pub fn open(_: []const u8) error{UnsupportedPlatform}!@This() {
+        return error.UnsupportedPlatform;
+    }
+    pub fn close(_: *@This()) void {}
+    pub fn lookup(_: *@This(), comptime T: type, _: [:0]const u8) ?T {
+        return null;
+    }
+} else std.DynLib;
+
 pub const LoadedLibrary = struct {
-    library: std.DynLib,
+    library: DynamicLibrary,
     api: Api,
 
     pub fn open(path: []const u8) !LoadedLibrary {
