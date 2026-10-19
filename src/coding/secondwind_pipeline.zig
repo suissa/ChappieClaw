@@ -77,7 +77,6 @@ pub fn rewriteCandidate(
     };
 }
 
-
 /// Verify every emitted proof through the independently callable Secondwind verifier.
 /// Proof coverage must equal blocks_rewritten; policy, cache, and request-shape checks
 /// remain separate Context Gateway evidence and are not inferred from these certificates.
@@ -251,19 +250,38 @@ fn jsonValuesEqual(a: std.json.Value, b: std.json.Value) bool {
 
 test "request pipeline preserves original when proof evidence is absent" {
     const Fake = struct {
-        fn abi() callconv(.c) u32 { return ffi.expected_abi_version; }
-        fn nullBytes(_: [*]const u8, _: usize, _: *usize) callconv(.c) ?[*]u8 { return null; }
-        fn nullSession(_: [*]const u8, _: usize) callconv(.c) ?*anyopaque { return null; }
+        fn abi() callconv(.c) u32 {
+            return ffi.expected_abi_version;
+        }
+        fn nullBytes(_: [*]const u8, _: usize, _: *usize) callconv(.c) ?[*]u8 {
+            return null;
+        }
+        fn nullSession(_: [*]const u8, _: usize) callconv(.c) ?*anyopaque {
+            return null;
+        }
         fn noSession(_: ?*anyopaque) callconv(.c) void {}
-        fn nullRewrite(_: ?*anyopaque, _: [*]const u8, _: usize, _: *usize) callconv(.c) ?[*]u8 { return null; }
+        fn nullRewrite(_: ?*anyopaque, _: [*]const u8, _: usize, _: *usize) callconv(.c) ?[*]u8 {
+            return null;
+        }
         fn noFree(_: ?[*]u8, _: usize) callconv(.c) void {}
     };
-    const api = ffi.Api{ .abiVersion = Fake.abi, .compress = Fake.nullBytes, .verify = Fake.nullBytes, .sessionNew = Fake.nullSession, .sessionFree = Fake.noSession, .rewrite = Fake.nullRewrite, .free = Fake.noFree };
+    const api = ffi.Api{
+        .abiVersion = Fake.abi,
+        .compress = Fake.nullBytes,
+        .verify = Fake.nullBytes,
+        .sessionNew = Fake.nullSession,
+        .sessionFree = Fake.noSession,
+        .rewrite = Fake.nullRewrite,
+        .free = Fake.noFree,
+    };
     var session = ffi.Session{ .api = api, .handle = null };
     var gateway = gateway_mod.Gateway(4){};
     const original = "{\"model\":\"m\",\"messages\":[{\"role\":\"tool\",\"content\":\"long\"}]}";
     const result = try rewriteForInference(std.testing.allocator, &session, &gateway, 1, original, null);
-    defer { var owned = result; owned.deinit(std.testing.allocator); }
+    defer {
+        var owned = result;
+        owned.deinit(std.testing.allocator);
+    }
     try std.testing.expect(!result.transformed);
     try std.testing.expectEqualStrings(original, result.request_json);
 }
