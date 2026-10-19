@@ -60,7 +60,7 @@ pub fn rewriteCandidate(
     // The native response must prove every block it reports as rewritten. Stats and
     // token savings are accounting, not evidence; missing, malformed, incomplete, or
     // invalid per-block certificates make the entire candidate ineligible.
-    if (!try verifyRewriteProofs(allocator, session, stats_value)) {
+    if (!try verifyRewriteProofs(allocator, session, stats_value, original_json, candidate_json)) {
         return passthrough(allocator, original_json);
     }
 
@@ -85,6 +85,8 @@ fn verifyRewriteProofs(
     allocator: std.mem.Allocator,
     session: *ffi.Session,
     stats: std.json.Value,
+    original_json: []const u8,
+    candidate_json: []const u8,
 ) !bool {
     if (stats != .object) return false;
     const rewritten_count = stats.object.get("blocks_rewritten") orelse return false;
@@ -93,17 +95,60 @@ fn verifyRewriteProofs(
     if (proofs_value != .array) return false;
     if (proofs_value.array.items.len != rewritten_count.integer) return false;
 
-    for (proofs_value.array.items) |proof| {
-        if (proof != .object) return false;
-        const wire_value = proof.object.get("wire") orelse return false;
-        const hash_value = proof.object.get("hash") orelse return false;
-        const key_value = proof.object.get("key") orelse return false;
-        if (wire_value != .string or hash_value != .string or key_value != .string) return false;
-        if (wire_value.string.len == 0 or hash_value.string.len == 0 or key_value.string.len == 0) return false;
-        const verified = session.api.verifyWire(allocator, wire_value.string, hash_value.string) catch return false;
-        if (!verified) return false;
+    var original_parsed = std.json.parseFromSlice(std.json.Value, allocator, original_json, .{}) catch return false;
+    defer original_parsed.deinit();
+    var candidate_parsed = std.json.parseFromSlice(std.json.Value, allocator, candidate_json, .{}) catch return false;
+    defer candidate_parsed.deinit();
+    if (original_parsed.value != .object or candidate_parsed.value != .object) return false;
+    const original_messages = original_parsed.value.object.get("messages") orelse return false;
+    const candidate_messages = candidate_parsed.value.object.get("messages") orelse return false;
+    if (original_messages != .array or candidate_messages != .array) return false;
+    if (original_messages.array.items.len != candidate_messages.array.items.len) return false;
+
+    var changed_count: usize = 0;
+    for (original_messages.array.items, candidate_messages.array.items, 0..) |before, after, index| {
+        if (before != .object or after != .object) return false;
+        const before_role = before.object.get("role") orelse return false;
+        const after_role = after.object.get("role") orelse return false;
+        if (before_role != .string or after_role != .string) return false;
+        if (!std.mem.eql(u8, before_role.string, "tool")) continue;
+        const before_content = before.object.get("content") orelse return false;
+        const after_content = after.object.get("content") orelse return false;
+        if (before_content != .string or after_content != .string) return false;
+        if (std.mem.eql(u8, before_content.string, after_content.string)) continue;
+        changed_count += 1;
+
+        const expected_key = blockKey(before_content.string);
+        var matched = false;
+        for (proofs_value.array.items) |proof| {
+            if (proof != .object) return false;
+            const path_value = proof.object.get("path") orelse return false;
+            const key_value = proof.object.get("key") orelse return false;
+            const wire_value = proof.object.get("wire") orelse return false;
+            const hash_value = proof.object.get("hash") orelse return false;
+            if (path_value != .string or key_value != .string or wire_value != .string or hash_value != .string) return false;
+            const expected_path = try std.fmt.allocPrint(allocator, "/messages/{d}/content", .{index});
+            defer allocator.free(expected_path);
+            if (!std.mem.eql(u8, path_value.string, expected_path)) continue;
+            if (!std.mem.eql(u8, key_value.string, expected_key)) return false;
+            if (!std.mem.eql(u8, wire_value.string, after_content.string)) return false;
+            const verified = session.api.verifyWire(allocator, wire_value.string, hash_value.string) catch return false;
+            if (!verified) return false;
+            matched = true;
+            break;
+        }
+        if (!matched) return false;
     }
-    return true;
+    return changed_count == proofs_value.array.items.len and changed_count == rewritten_count.integer;
+}
+
+fn blockKey(raw: []const u8) [16]u8 {
+    var digest: [std.crypto.hash.Blake3.digest_length]u8 = undefined;
+    std.crypto.hash.Blake3.hash(raw, &digest, .{});
+    const hex = std.fmt.bytesToHex(digest, .lower);
+    var key: [16]u8 = undefined;
+    @memcpy(&key, hex[0..16]);
+    return key;
 }
 
 /// Runs secondwind and returns either the admitted candidate or the byte-identical
@@ -206,6 +251,11 @@ test "request pipeline preserves original when proof evidence is absent" {
     defer { var owned = result; owned.deinit(std.testing.allocator); }
     try std.testing.expect(!result.transformed);
     try std.testing.expectEqualStrings(original, result.request_json);
+}
+
+test "block key is deterministic and content-sensitive" {
+    try std.testing.expectEqualSlices(u8, &blockKey("same"), &blockKey("same"));
+    try std.testing.expect(!std.mem.eql(u8, &blockKey("same"), &blockKey("different")));
 }
 
 test "request diff permits only tool result content changes" {
