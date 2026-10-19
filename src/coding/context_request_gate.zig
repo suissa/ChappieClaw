@@ -44,7 +44,7 @@ pub fn admit(
     const validation = gateway_mod.Validation{
         .lossless = c.lossless,
         .coverage_complete = c.coverage_complete,
-        .policy_allowed = c.policy_allowed and requestMetadataCompatible(original, c.request),
+        .policy_allowed = c.policy_allowed and requestMetadataCompatible(original, c.request) and eligibleMessageChangesOnly(original, c.request),
         .cache_compatible = c.cache_compatible,
         .original_tokens = c.original_tokens,
         .candidate_tokens = c.candidate_tokens,
@@ -83,6 +83,53 @@ fn toolsEqual(a: ?[]const providers.ToolSpec, b: ?[]const providers.ToolSpec) bo
             !std.mem.eql(u8, left.parameters_json, right.parameters_json))
         {
             return false;
+        }
+    }
+    return true;
+}
+
+/// Only tool-output text may change. Roles, message boundaries, names, tool-call IDs,
+/// and multimodal parts remain byte-identical so a transformer cannot rewrite user intent,
+/// assistant instructions, or image inputs.
+fn eligibleMessageChangesOnly(original: providers.ChatRequest, candidate: providers.ChatRequest) bool {
+    if (original.messages.len != candidate.messages.len) return false;
+    for (original.messages, candidate.messages) |before, after| {
+        if (before.role != after.role or
+            !optionalStringEqual(before.name, after.name) or
+            !optionalStringEqual(before.tool_call_id, after.tool_call_id) or
+            !contentPartsEqual(before.content_parts, after.content_parts))
+        {
+            return false;
+        }
+        if ((before.role != .tool or before.content_parts != null) and
+            !std.mem.eql(u8, before.content, after.content))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn contentPartsEqual(
+    a: ?[]const providers.ContentPart,
+    b: ?[]const providers.ContentPart,
+) bool {
+    if (a == null or b == null) return a == null and b == null;
+    if (a.?.len != b.?.len) return false;
+    for (a.?, b.?) |left, right| {
+        switch (left) {
+            .text => |text| switch (right) {
+                .text => |other| if (!std.mem.eql(u8, text, other)) return false,
+                else => return false,
+            },
+            .image_url => |image| switch (right) {
+                .image_url => |other| if (!std.mem.eql(u8, image.url, other.url) or image.detail != other.detail) return false,
+                else => return false,
+            },
+            .image_base64 => |image| switch (right) {
+                .image_base64 => |other| if (!std.mem.eql(u8, image.data, other.data) or !std.mem.eql(u8, image.media_type, other.media_type)) return false,
+                else => return false,
+            },
         }
     }
     return true;
@@ -193,9 +240,9 @@ test "typed request gate rejects unproven candidates" {
 
 test "typed request gate accepts a proven strict reduction" {
     var gateway = gateway_mod.Gateway(8){};
-    const original = providers.ChatRequest{ .messages = &.{providers.ChatMessage.user("a long context")}, .model = "model" };
+    const original = providers.ChatRequest{ .messages = &.{providers.ChatMessage.toolMsg("a long context", "call-1")}, .model = "model" };
     const candidate = Candidate{
-        .request = .{ .messages = &.{providers.ChatMessage.user("short")}, .model = "model" },
+        .request = .{ .messages = &.{providers.ChatMessage.toolMsg("short", "call-1")}, .model = "model" },
         .original_tokens = 20,
         .candidate_tokens = 5,
         .lossless = true,
@@ -233,4 +280,56 @@ test "typed request gate rejects candidates that alter provider metadata" {
     const result = try admit(&gateway, 3, 4, original, candidate);
     try std.testing.expect(!result.transformed);
     try std.testing.expectEqualStrings("model", result.request.model);
+}
+
+
+test "typed request gate never rewrites user intent even with claimed proof" {
+    var gateway = gateway_mod.Gateway(8){};
+    const original = providers.ChatRequest{
+        .messages = &.{providers.ChatMessage.user("original user intent that must remain unchanged")},
+        .model = "model",
+    };
+    const candidate = Candidate{
+        .request = .{ .messages = &.{providers.ChatMessage.user("rewritten user intent")}, .model = "model" },
+        .original_tokens = 20,
+        .candidate_tokens = 5,
+        .lossless = true,
+        .coverage_complete = true,
+        .policy_allowed = true,
+        .cache_compatible = true,
+    };
+    const result = try admit(&gateway, 4, 5, original, candidate);
+    try std.testing.expect(!result.transformed);
+    try std.testing.expectEqualStrings(
+        "original user intent that must remain unchanged",
+        result.request.messages[0].content,
+    );
+}
+
+test "typed request gate never rewrites multimodal parts" {
+    var gateway = gateway_mod.Gateway(8){};
+    const original = providers.ChatRequest{
+        .messages = &.{.{
+            .role = .tool,
+            .content = "tool result",
+            .content_parts = &.{providers.makeImageUrlPart("https://example.invalid/image.png")},
+        }},
+        .model = "model",
+    };
+    const candidate = Candidate{
+        .request = .{ .messages = &.{.{
+            .role = .tool,
+            .content = "short tool result",
+            .content_parts = &.{providers.makeImageUrlPart("https://example.invalid/other.png")},
+        }}, .model = "model" },
+        .original_tokens = 20,
+        .candidate_tokens = 5,
+        .lossless = true,
+        .coverage_complete = true,
+        .policy_allowed = true,
+        .cache_compatible = true,
+    };
+    const result = try admit(&gateway, 5, 6, original, candidate);
+    try std.testing.expect(!result.transformed);
+    try std.testing.expectEqualStrings("tool result", result.request.messages[0].content);
 }
