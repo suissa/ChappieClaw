@@ -151,8 +151,9 @@ fn proofMatchesToolChange(
     if (path_value != .string or key_value != .string or wire_value != .string) return false;
     const expected_path = try std.fmt.allocPrint(allocator, "/messages/{d}/content", .{index});
     defer allocator.free(expected_path);
+    const expected_key = blockKey(before_content.string);
     return std.mem.eql(u8, path_value.string, expected_path) and
-        std.mem.eql(u8, key_value.string, &blockKey(before_content.string)) and
+        std.mem.eql(u8, key_value.string, &expected_key) and
         std.mem.eql(u8, wire_value.string, after_content.string);
 }
 
@@ -271,10 +272,14 @@ test "proof must bind the exact changed tool output path, source key, and wire" 
     const allocator = std.testing.allocator;
     const before = std.json.Value{ .string = "original tool output" };
     const after = std.json.Value{ .string = "compressed wire" };
-    const good = try std.json.parseFromSlice(std.json.Value, allocator,
-        "{\"path\":\"/messages/1/content\",\"key\":\"" ++
-        std.fmt.bytesToHex(blockKey("original tool output"), .lower)[0..] ++
-        "\",\"wire\":\"compressed wire\"}", .{});
+    const key = blockKey("original tool output");
+    const good_json = try std.json.Stringify.valueAlloc(allocator, .{
+        .path = "/messages/1/content",
+        .key = key[0..],
+        .wire = "compressed wire",
+    }, .{});
+    defer allocator.free(good_json);
+    const good = try std.json.parseFromSlice(std.json.Value, allocator, good_json, .{});
     defer good.deinit();
     try std.testing.expect(try proofMatchesToolChange(allocator, good.value, before, after, 1));
     try std.testing.expect(!try proofMatchesToolChange(allocator, good.value, before, after, 0));
