@@ -34,7 +34,7 @@ The FFI wrapper is transport and memory-ownership glue, not a proof adapter. In 
 1. No proxy or native transformation is activated by default.
 2. A successful library/proxy call is not itself proof that ChappieClaw independently verified semantic equivalence.
 3. Never send credentials or raw prompts to telemetry; use payload-free Context Gateway audit records.
-4. Only message/tool-output content may be eligible for replacement. Provider, model, tools, session, and generation settings must remain unchanged.
+4. The typed request gate permits content changes only in existing tool-result messages. It preserves message count/order, roles, names, tool-call IDs, user/system/assistant content, and all multimodal parts. Provider, model, tools, session, and generation settings must remain unchanged.
 5. The internal streaming gate buffers until final response admission, trading first-token latency for strict publication.
 6. On ABI mismatch, malformed output, allocation failure, or uncertain configuration, retain the original request or fail closed according to the caller's explicit policy.
 
@@ -45,6 +45,7 @@ The FFI wrapper is transport and memory-ownership glue, not a proof adapter. In 
 - [ ] Run Zig 0.16.0 formatting, tests, build, and coding-contract CI.
 - [ ] Add host-loader integration tests for the actual library artifact on supported OS/architectures.
 - [ ] Verify malformed/error JSON and output-size-limit behavior.
-- [ ] Test request preservation for tools, multimodal content, retries, and streaming.
+- [x] Add fail-closed request-gate tests for user-intent and multimodal-content preservation.
+- [ ] Test request preservation for tools, multimodal content, retries, and streaming end to end.
 - [ ] Compare real tokenizer counts against the same fixture with and without transformation.
 - [ ] Do not enable the typed request transformer until proof/coverage evidence is mapped and tested end to end.
