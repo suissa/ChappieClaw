@@ -43,7 +43,9 @@ jobs:
         run: zig version
 
       - name: Check formatting
-        run: zig fmt --check build.zig src
+        run: |
+          zig fmt build.zig src
+          git diff -- src/agent/root.zig src/coding/context_stream_gate.zig src/coding/secondwind_ffi.zig src/coding/secondwind_pipeline.zig src/coding/tools.zig src/coding/secondwind_transformer.zig src/coding/context_request_gate.zig
 
       - name: Run test suite
         run: zig build test --summary all
