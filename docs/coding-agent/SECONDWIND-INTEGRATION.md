@@ -29,7 +29,7 @@ Returned JSON is copied into the caller's allocator and the library allocation i
 
 The pipeline accepts independent `Evidence` from the host; it does not derive losslessness, coverage, or token counts from `stats`. Missing evidence, malformed envelopes, non-positive reported token savings, or any change outside existing `messages[*]` entries with `role="tool"` causes byte-identical original-request passthrough. The gateway also requires strict token and byte reduction. This is a callable integration seam, not yet automatically invoked by provider inference.
 
-`src/coding/secondwind_evidence.zig` now provides `verifyInlineBlock`: it independently runs `sw_compress` on the original tool-output block, requires the proposed candidate to match the exact inline wire, then calls `sw_verify` with the portable certificate. Token counts are taken from that independently generated compression result, not from `sw_rewrite` stats. FFI errors, malformed responses, non-compressed outcomes, wire mismatches, failed certificates, and non-positive savings return an unverified proof. Offload markers are deliberately unsupported because they need an independent store-recovery proof. This helper is a per-block evidence producer; host code must still aggregate coverage across every changed tool output and supply an explicit cache-compatibility decision. It is not yet wired into provider inference.
+`src/coding/secondwind_evidence.zig` now provides `verifyInlineBlock`: it independently runs `sw_compress` on the original tool-output block, requires the proposed candidate to match the exact inline wire, then calls `sw_verify` with the portable certificate. Token counts are taken from that independently generated compression result, not from `sw_rewrite` stats. FFI errors, malformed responses, non-compressed outcomes, wire mismatches, failed certificates, and non-positive savings return an unverified proof. Offload markers are deliberately unsupported because they need an independent store-recovery proof. `verifyRequestCoverage` now aggregates this proof across every changed `messages[*]` tool output. It rejects the whole candidate if any changed block lacks a proof, if no blocks changed, if token totals overflow, or if restoring proven tool contents does not make the entire request identical (including model/settings and non-tool messages). It returns complete losslessness/coverage evidence plus token totals; policy and cache compatibility remain explicit host decisions. The helper is not yet wired into provider inference.
 
 ## Safety and behavior boundaries
 
@@ -51,6 +51,7 @@ The pipeline accepts independent `Evidence` from the host; it does not derive lo
 - [x] Add JSON-pipeline tests for fail-closed missing evidence and disallowing changes to user content/model metadata.
 - [ ] Test request preservation for tools, multimodal content, retries, and streaming end to end.
 - [x] Add a fail-closed independent inline-block verifier using `sw_compress` + `sw_verify` and independently reported token counts.
-- [ ] Aggregate block proofs into request-level coverage and connect the verified pipeline to provider inference.
+- [x] Aggregate independent block proofs into request-level coverage, rejecting any unproven change or metadata drift.
+- [ ] Connect request-level evidence and the verified pipeline to provider inference.
 - [ ] Compare real tokenizer counts against the same fixture with and without transformation.
 - [ ] Do not enable the typed request transformer until proof/coverage evidence is mapped and tested end to end.
