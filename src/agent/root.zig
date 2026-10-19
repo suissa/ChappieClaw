@@ -2308,7 +2308,8 @@ pub const Agent = struct {
                             }),
                             turn_model_name,
                             self.temperature,
-                            context_stream_gate_mod.Gate.onChunk, &stream_gate,
+                            context_stream_gate_mod.Gate.onChunk,
+                            &stream_gate,
                         ) catch |retry_err| {
                             if (turn_route_selection) |selection| try self.markRouteDegraded(selection, retry_err);
                             self.emitUsageFailure(turn_model_name);
