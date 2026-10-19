@@ -155,6 +155,26 @@ fn deserializeRequest(allocator: std.mem.Allocator, json: []const u8) !providers
     };
 }
 
+fn deinitDecodedRequest(allocator: std.mem.Allocator, request: providers.ChatRequest) void {
+    for (request.messages) |message| {
+        allocator.free(message.content);
+        if (message.name) |name| allocator.free(name);
+        if (message.tool_call_id) |tool_call_id| allocator.free(tool_call_id);
+    }
+    allocator.free(request.messages);
+    if (request.session_id) |session_id| allocator.free(session_id);
+    allocator.free(request.model);
+    if (request.reasoning_effort) |effort| allocator.free(effort);
+    if (request.tools) |tools| {
+        for (tools) |tool| {
+            allocator.free(tool.name);
+            allocator.free(tool.description);
+            allocator.free(tool.parameters_json);
+        }
+        allocator.free(tools);
+    }
+}
+
 fn duplicateRequired(allocator: std.mem.Allocator, value: ?std.json.Value) ![]u8 {
     const v = value orelse return error.InvalidSecondwindRequest;
     if (v != .string) return error.InvalidSecondwindRequest;
@@ -206,6 +226,7 @@ test "wire adapter round trips supported request metadata" {
     const json = try serializeRequest(std.testing.allocator, request);
     defer std.testing.allocator.free(json);
     const decoded = try deserializeRequest(std.testing.allocator, json);
+    defer deinitDecodedRequest(std.testing.allocator, decoded);
     try std.testing.expectEqualStrings("x", decoded.messages[0].content);
     try std.testing.expectEqualStrings("session", decoded.session_id.?);
     try std.testing.expectEqualStrings("m", decoded.model);
