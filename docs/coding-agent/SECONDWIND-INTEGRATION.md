@@ -29,7 +29,7 @@ Returned JSON is copied into the caller's allocator and the library allocation i
 
 The pipeline accepts independent `Evidence` from the host; it does not derive losslessness, coverage, or token counts from `stats`. Missing evidence, malformed envelopes, non-positive reported token savings, or any change outside existing `messages[*]` entries with `role="tool"` causes byte-identical original-request passthrough. The gateway also requires strict token and byte reduction. This is a callable integration seam, not yet automatically invoked by provider inference.
 
-The FFI wrapper is transport and memory-ownership glue, not a proof adapter. In particular, `sw_rewrite` reports request/stats and internally applies secondwind's proof and net-cost gates, but the returned stats alone do not populate all fields in ChappieClaw's `context_request_gate.Candidate`. A follow-up must serialize only supported request fields, preserve provider/model/tools/generation settings, validate the returned JSON shape, and map independently checkable proof/token/coverage evidence before the Context Gateway may accept a replacement. Until then, keep the native wrapper opt-in and use the proxy path only as separately configured deployment infrastructure.
+The FFI wrapper remains transport and memory-ownership glue, not a proof adapter. The new pipeline preserves the original serialized request when the evidence is absent or any gate fails. The remaining work is to connect this callable pipeline to the provider inference entry point and implement a trustworthy evidence producer; until then, do not enable it automatically.
 
 ## Safety and behavior boundaries
 
