@@ -54,7 +54,7 @@ pub const Response = struct {
 
 /// Payload-free audit metadata. Never stores prompts, outputs, or tool arguments.
 pub const Record = struct {
-    sequence: u64,
+    sequence: u64 = 0,
     request_id: u64,
     intent_id: u128,
     phase: Phase,
