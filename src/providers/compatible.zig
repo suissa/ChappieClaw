@@ -8,7 +8,7 @@ const secondwind_ffi = @import("../coding/secondwind_ffi.zig");
 const secondwind_pipeline = @import("../coding/secondwind_pipeline.zig");
 const context_gateway = @import("../coding/context_gateway.zig");
 
-const SecondwindGateway = context_gateway.Gateway(256);
+pub const SecondwindGateway = context_gateway.Gateway(256);
 
 const Provider = root.Provider;
 const ChatMessage = root.ChatMessage;
@@ -261,6 +261,34 @@ pub const OpenAiCompatibleProvider = struct {
             .user_agent = user_agent,
             .allocator = allocator,
         };
+    }
+
+    /// Explicitly opt this provider into verified Secondwind rewriting.
+    /// The caller owns the session and gateway and must keep them alive until
+    /// disableSecondwind() or provider teardown.
+    pub fn configureSecondwind(
+        self: *OpenAiCompatibleProvider,
+        session: *secondwind_ffi.Session,
+        gateway: *SecondwindGateway,
+        intent_id: u128,
+        policy_allowed: bool,
+        cache_compatible: bool,
+    ) void {
+        self.secondwind_session = session;
+        self.secondwind_gateway = gateway;
+        self.secondwind_intent_id = intent_id;
+        self.secondwind_policy_allowed = policy_allowed;
+        self.secondwind_cache_compatible = cache_compatible;
+    }
+
+    /// Restore the byte-preserving legacy path without taking ownership of
+    /// externally managed Secondwind resources.
+    pub fn disableSecondwind(self: *OpenAiCompatibleProvider) void {
+        self.secondwind_session = null;
+        self.secondwind_gateway = null;
+        self.secondwind_intent_id = 0;
+        self.secondwind_policy_allowed = false;
+        self.secondwind_cache_compatible = false;
     }
 
     fn validateUserAgent(user_agent: []const u8) bool {
@@ -3329,4 +3357,40 @@ test "shouldSkipStreaming: multi-message total triggers skip when sum exceeds li
     // Individual messages are each under the limit; verify the sum is what matters.
     const single = root.ChatRequest{ .messages = &[_]root.ChatMessage{m1}, .model = "m" };
     try std.testing.expect(!OpenAiCompatibleProvider.shouldSkipStreaming(25, single));
+}
+
+
+test "Secondwind provider hook is disabled by default and preserves serialized JSON" {
+    var provider = OpenAiCompatibleProvider.init(
+        std.testing.allocator,
+        "test",
+        "https://example.com/v1",
+        null,
+        .bearer,
+        null,
+    );
+    const request_json = "{\\"model\\":\\"m\\",\\"messages\\":[{\\"role\\":\\"tool\\",\\"content\\":\\"result\\"}]}";
+    const rewritten = try provider.rewriteBodyWithSecondwind(std.testing.allocator, request_json, "m");
+    defer std.testing.allocator.free(rewritten);
+    try std.testing.expectEqualStrings(request_json, rewritten);
+    try std.testing.expect(provider.secondwind_session == null);
+    try std.testing.expect(provider.secondwind_gateway == null);
+}
+
+test "disabling Secondwind clears opt-in policy state" {
+    var provider = OpenAiCompatibleProvider.init(
+        std.testing.allocator,
+        "test",
+        "https://example.com/v1",
+        null,
+        .bearer,
+        null,
+    );
+    provider.secondwind_intent_id = 42;
+    provider.secondwind_policy_allowed = true;
+    provider.secondwind_cache_compatible = true;
+    provider.disableSecondwind();
+    try std.testing.expectEqual(@as(u128, 0), provider.secondwind_intent_id);
+    try std.testing.expect(!provider.secondwind_policy_allowed);
+    try std.testing.expect(!provider.secondwind_cache_compatible);
 }
