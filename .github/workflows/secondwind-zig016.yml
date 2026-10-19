@@ -1,0 +1,56 @@
+name: Secondwind Zig 0.16 validation
+
+on:
+  push:
+    branches:
+      - "ci/secondwind-*"
+      - "feat/secondwind-*"
+  pull_request:
+    branches:
+      - main
+      - "feat/secondwind-*"
+      - "ci/secondwind-*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: secondwind-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ZIG_VERSION: "0.16.0"
+
+jobs:
+  secondwind-validation:
+    name: Format, tests, and optimized build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Zig 0.16.0
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Confirm compiler version
+        run: |
+          test "$(zig version)" = "${ZIG_VERSION}"
+          zig version
+
+      - name: Check Zig formatting
+        run: zig fmt --check build.zig src
+
+      - name: Run unit and coding-contract tests
+        run: zig build test --summary all
+
+      - name: Build optimized binary
+        run: zig build -Doptimize=ReleaseSmall
+
+      - name: Verify executable
+        run: |
+          test -x zig-out/bin/nullclaw
+          ./zig-out/bin/nullclaw --help >/dev/null
