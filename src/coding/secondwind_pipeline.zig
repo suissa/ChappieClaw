@@ -315,11 +315,19 @@ test "block key is deterministic and content-sensitive" {
 
 test "proof gate rejects missing coverage and verifier failures" {
     const Fake = struct {
-        fn abi() callconv(.c) u32 { return ffi.expected_abi_version; }
-        fn nullBytes(_: [*]const u8, _: usize, _: *usize) callconv(.c) ?[*]u8 { return null; }
-        fn nullSession(_: [*]const u8, _: usize) callconv(.c) ?*anyopaque { return null; }
+        fn abi() callconv(.c) u32 {
+            return ffi.expected_abi_version;
+        }
+        fn nullBytes(_: [*]const u8, _: usize, _: *usize) callconv(.c) ?[*]u8 {
+            return null;
+        }
+        fn nullSession(_: [*]const u8, _: usize) callconv(.c) ?*anyopaque {
+            return null;
+        }
         fn noSession(_: ?*anyopaque) callconv(.c) void {}
-        fn nullRewrite(_: ?*anyopaque, _: [*]const u8, _: usize, _: *usize) callconv(.c) ?[*]u8 { return null; }
+        fn nullRewrite(_: ?*anyopaque, _: [*]const u8, _: usize, _: *usize) callconv(.c) ?[*]u8 {
+            return null;
+        }
         fn noFree(_: ?[*]u8, _: usize) callconv(.c) void {}
     };
     const api = ffi.Api{
