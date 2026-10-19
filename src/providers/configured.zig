@@ -5,6 +5,24 @@ const Config = @import("../config.zig").Config;
 const config_types = @import("../config_types.zig");
 const compatible = @import("compatible.zig");
 const factory = @import("factory.zig");
+const secondwind_runtime = @import("../coding/secondwind_runtime.zig");
+
+/// Explicitly connect an already initialized Secondwind runtime to a configured
+/// provider holder. This remains opt-in; ordinary holder construction is unchanged.
+pub fn attachSecondwind(
+    holder: *factory.ProviderHolder,
+    runtime: *secondwind_runtime.Runtime,
+) !void {
+    try runtime.attachHolder(holder);
+}
+
+/// Must be called after in-flight requests stop and before runtime.deinit().
+pub fn detachSecondwind(
+    holder: *factory.ProviderHolder,
+    runtime: *secondwind_runtime.Runtime,
+) void {
+    runtime.detachHolder(holder);
+}
 
 pub fn holderFromConfig(
     allocator: std.mem.Allocator,
