@@ -206,7 +206,7 @@ pub fn verifyRequestCoverage(
     };
 }
 
-test "request coverage rejects changed user content and metadata" {
+test "request coverage rejects metadata changes even when tool text is unchanged" {
     const Fake = struct {
         fn abi() callconv(.c) u32 { return ffi.expected_abi_version; }
         fn nullBytes(_: [*]const u8, _: usize, _: *usize) callconv(.c) ?[*]u8 { return null; }
@@ -225,6 +225,6 @@ test "request coverage rejects changed user content and metadata" {
         .free = Fake.noFree,
     };
     const original = "{\\"model\\":\\"m\\",\\"messages\\":[{\\"role\\":\\"user\\",\\"content\\":\\"keep\\"},{\\"role\\":\\"tool\\",\\"content\\":\\"long\\"}]}";
-    const changed_user = "{\\"model\\":\\"m\\",\\"messages\\":[{\\"role\\":\\"user\\",\\"content\\":\\"changed\\"},{\\"role\\":\\"tool\\",\\"content\\":\\"short\\"}]}";
-    try std.testing.expect(verifyRequestCoverage(std.testing.allocator, api, original, changed_user, "m", true, true) == null);
+    const changed_model = "{\\"model\\":\\"other-model\\",\\"messages\\":[{\\"role\\":\\"user\\",\\"content\\":\\"keep\\"},{\\"role\\":\\"tool\\",\\"content\\":\\"long\\"}]}";
+    try std.testing.expect(verifyRequestCoverage(std.testing.allocator, api, original, changed_model, "m", true, true) == null);
 }
