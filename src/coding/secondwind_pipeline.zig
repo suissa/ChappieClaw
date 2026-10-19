@@ -254,8 +254,11 @@ test "request pipeline preserves original when proof evidence is absent" {
 }
 
 test "block key is deterministic and content-sensitive" {
-    try std.testing.expectEqualSlices(u8, &blockKey("same"), &blockKey("same"));
-    try std.testing.expect(!std.mem.eql(u8, &blockKey("same"), &blockKey("different")));
+    const first = blockKey("same");
+    const second = blockKey("same");
+    const different = blockKey("different");
+    try std.testing.expectEqualSlices(u8, &first, &second);
+    try std.testing.expect(!std.mem.eql(u8, &first, &different));
 }
 
 test "request diff permits only tool result content changes" {
