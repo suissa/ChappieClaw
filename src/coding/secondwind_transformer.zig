@@ -168,19 +168,32 @@ fn duplicateOptional(allocator: std.mem.Allocator, value: ?std.json.Value) !?[]u
 }
 fn numberOrDefault(value: ?std.json.Value, fallback: f64) f64 {
     const v = value orelse return fallback;
-    return switch (v) { .float => |n| n, .integer => |n| @floatFromInt(n), else => fallback };
+    return switch (v) {
+        .float => |n| n,
+        .integer => |n| @floatFromInt(n),
+        else => fallback,
+    };
 }
 fn uintOrNull(value: ?std.json.Value) ?u32 {
     const v = value orelse return null;
-    return switch (v) { .integer => |n| if (n >= 0 and n <= std.math.maxInt(u32)) @intCast(n) else null, else => null };
+    return switch (v) {
+        .integer => |n| if (n >= 0 and n <= std.math.maxInt(u32)) @intCast(n) else null,
+        else => null,
+    };
 }
 fn uintOrDefault(value: ?std.json.Value, fallback: u64) u64 {
     const v = value orelse return fallback;
-    return switch (v) { .integer => |n| if (n >= 0) @intCast(n) else fallback, else => fallback };
+    return switch (v) {
+        .integer => |n| if (n >= 0) @intCast(n) else fallback,
+        else => fallback,
+    };
 }
 fn boolOrNull(value: ?std.json.Value) ?bool {
     const v = value orelse return null;
-    return switch (v) { .bool => |b| b, else => null };
+    return switch (v) {
+        .bool => |b| b,
+        else => null,
+    };
 }
 
 test "wire adapter declines multimodal requests" {
