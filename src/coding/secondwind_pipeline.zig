@@ -118,7 +118,6 @@ fn verifyRewriteProofs(
         if (std.mem.eql(u8, before_content.string, after_content.string)) continue;
         changed_count += 1;
 
-        const expected_key = blockKey(before_content.string);
         var matched = false;
         for (proofs_value.array.items) |proof| {
             if (proof != .object) return false;
@@ -127,11 +126,7 @@ fn verifyRewriteProofs(
             const wire_value = proof.object.get("wire") orelse return false;
             const hash_value = proof.object.get("hash") orelse return false;
             if (path_value != .string or key_value != .string or wire_value != .string or hash_value != .string) return false;
-            const expected_path = try std.fmt.allocPrint(allocator, "/messages/{d}/content", .{index});
-            defer allocator.free(expected_path);
-            if (!std.mem.eql(u8, path_value.string, expected_path)) continue;
-            if (!std.mem.eql(u8, key_value.string, expected_key)) return false;
-            if (!std.mem.eql(u8, wire_value.string, after_content.string)) return false;
+            if (!try proofMatchesToolChange(allocator, proof, before_content, after_content, index)) continue;
             const verified = session.api.verifyWire(allocator, wire_value.string, hash_value.string) catch return false;
             if (!verified) return false;
             matched = true;
@@ -140,6 +135,25 @@ fn verifyRewriteProofs(
         if (!matched) return false;
     }
     return changed_count == proofs_value.array.items.len and changed_count == rewritten_count.integer;
+}
+
+fn proofMatchesToolChange(
+    allocator: std.mem.Allocator,
+    proof: std.json.Value,
+    before_content: std.json.Value,
+    after_content: std.json.Value,
+    index: usize,
+) !bool {
+    if (proof != .object or before_content != .string or after_content != .string) return false;
+    const path_value = proof.object.get("path") orelse return false;
+    const key_value = proof.object.get("key") orelse return false;
+    const wire_value = proof.object.get("wire") orelse return false;
+    if (path_value != .string or key_value != .string or wire_value != .string) return false;
+    const expected_path = try std.fmt.allocPrint(allocator, "/messages/{d}/content", .{index});
+    defer allocator.free(expected_path);
+    return std.mem.eql(u8, path_value.string, expected_path) and
+        std.mem.eql(u8, key_value.string, &blockKey(before_content.string)) and
+        std.mem.eql(u8, wire_value.string, after_content.string);
 }
 
 fn blockKey(raw: []const u8) [16]u8 {
@@ -251,6 +265,21 @@ test "request pipeline preserves original when proof evidence is absent" {
     defer { var owned = result; owned.deinit(std.testing.allocator); }
     try std.testing.expect(!result.transformed);
     try std.testing.expectEqualStrings(original, result.request_json);
+}
+
+test "proof must bind the exact changed tool output path, source key, and wire" {
+    const allocator = std.testing.allocator;
+    const before = std.json.Value{ .string = "original tool output" };
+    const after = std.json.Value{ .string = "compressed wire" };
+    const good = try std.json.parseFromSlice(std.json.Value, allocator,
+        "{\"path\":\"/messages/1/content\",\"key\":\"" ++
+        std.fmt.bytesToHex(blockKey("original tool output"), .lower)[0..] ++
+        "\",\"wire\":\"compressed wire\"}", .{});
+    defer good.deinit();
+    try std.testing.expect(try proofMatchesToolChange(allocator, good.value, before, after, 1));
+    try std.testing.expect(!try proofMatchesToolChange(allocator, good.value, before, after, 0));
+    const wrong_wire = std.json.Value{ .string = "different wire" };
+    try std.testing.expect(!try proofMatchesToolChange(allocator, good.value, before, wrong_wire, 1));
 }
 
 test "block key is deterministic and content-sensitive" {
