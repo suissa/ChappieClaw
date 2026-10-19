@@ -92,6 +92,72 @@ pub fn rewriteForInference(
     };
 }
 
+/// Preferred entry point for a provider boundary: derives proof from the loaded
+/// Secondwind ABI for every changed tool-output block. No caller-supplied stats or
+/// boolean proof can independently authorize the rewritten request.
+pub fn rewriteVerifiedForInference(
+    allocator: std.mem.Allocator,
+    session: *ffi.Session,
+    gateway: anytype,
+    intent_id: u128,
+    original_json: []const u8,
+    model: []const u8,
+    policy_allowed: bool,
+    cache_compatible: bool,
+) !Result {
+    const envelope_json = session.rewriteJson(allocator, original_json) catch
+        return passthrough(allocator, original_json);
+    defer allocator.free(envelope_json);
+
+    var envelope_parsed = std.json.parseFromSlice(std.json.Value, allocator, envelope_json, .{}) catch
+        return passthrough(allocator, original_json);
+    defer envelope_parsed.deinit();
+
+    if (envelope_parsed.value != .object) return passthrough(allocator, original_json);
+    const rewritten_value = envelope_parsed.value.object.get("request") orelse
+        return passthrough(allocator, original_json);
+    const stats_value = envelope_parsed.value.object.get("stats") orelse
+        return passthrough(allocator, original_json);
+    if (stats_value != .object) return passthrough(allocator, original_json);
+
+    const saved = stats_value.object.get("tokens_saved") orelse return passthrough(allocator, original_json);
+    if (saved != .integer or saved.integer <= 0) return passthrough(allocator, original_json);
+
+    const candidate_json = std.json.Stringify.valueAlloc(allocator, rewritten_value, .{}) catch
+        return passthrough(allocator, original_json);
+    defer allocator.free(candidate_json);
+
+    if (!try onlyToolOutputContentChanged(allocator, original_json, candidate_json)) {
+        return passthrough(allocator, original_json);
+    }
+
+    const evidence_mod = @import("secondwind_evidence.zig");
+    const proof = evidence_mod.verifyRequestCoverage(
+        allocator,
+        session.api,
+        original_json,
+        candidate_json,
+        model,
+        policy_allowed,
+        cache_compatible,
+    ) orelse return passthrough(allocator, original_json);
+
+    const admission = try gateway.beforeInference(intent_id, original_json, candidate_json, .{
+        .lossless = proof.lossless,
+        .coverage_complete = proof.coverage_complete,
+        .policy_allowed = proof.policy_allowed,
+        .cache_compatible = proof.cache_compatible,
+        .original_tokens = proof.original_tokens,
+        .candidate_tokens = proof.candidate_tokens,
+    });
+    const accepted = admission.decision == .transformed;
+    return .{
+        .request_json = try allocator.dupe(u8, if (accepted) candidate_json else original_json),
+        .transformed = accepted,
+        .stats_json = try std.json.Stringify.valueAlloc(allocator, stats_value, .{}),
+    };
+}
+
 fn passthrough(allocator: std.mem.Allocator, original_json: []const u8) !Result {
     return .{
         .request_json = try allocator.dupe(u8, original_json),
