@@ -3369,7 +3369,7 @@ test "Secondwind provider hook is disabled by default and preserves serialized J
         .bearer,
         null,
     );
-    const request_json = "{\\"model\\":\\"m\\",\\"messages\\":[{\\"role\\":\\"tool\\",\\"content\\":\\"result\\"}]}";
+    const request_json = "{\"model\":\"m\",\"messages\":[{\"role\":\"tool\",\"content\":\"result\"}]}";
     const rewritten = try provider.rewriteBodyWithSecondwind(std.testing.allocator, request_json, "m");
     defer std.testing.allocator.free(rewritten);
     try std.testing.expectEqualStrings(request_json, rewritten);
