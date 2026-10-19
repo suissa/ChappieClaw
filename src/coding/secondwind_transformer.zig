@@ -93,14 +93,102 @@ fn serializeRequest(allocator: std.mem.Allocator, request: providers.ChatRequest
     if (request.tools) |source| {
         tools = try allocator.alloc(WireTool, source.len);
         for (source, 0..) |tool, i| {
-            tools.?[i] = .{
-                .name = tool.name,
-                .description = tool.description,
-                .parameters_json = "{}" }},
-        .timeout_secs = 9,
-        .reasoning_effort = "low",
-        .include_reasoning = true,
+            tools.?[i] = .{ .name = tool.name, .description = tool.description, .parameters_json = tool.parameters_json };
+        }
+    }
+    const wire = WireRequest{
+        .messages = messages,
+        .session_id = request.session_id,
+        .model = request.model,
+        .temperature = request.temperature,
+        .max_tokens = request.max_tokens,
+        .tools = tools,
+        .timeout_secs = request.timeout_secs,
+        .reasoning_effort = request.reasoning_effort,
+        .include_reasoning = request.include_reasoning,
     };
+    return std.json.Stringify.valueAlloc(allocator, wire, .{});
+}
+
+fn deserializeRequest(allocator: std.mem.Allocator, json: []const u8) !providers.ChatRequest {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.InvalidSecondwindRequest;
+    const messages_value = parsed.value.object.get("messages") orelse return error.InvalidSecondwindRequest;
+    if (messages_value != .array) return error.InvalidSecondwindRequest;
+    const messages = try allocator.alloc(providers.ChatMessage, messages_value.array.items.len);
+    for (messages_value.array.items, 0..) |value, i| {
+        if (value != .object) return error.InvalidSecondwindRequest;
+        const role_value = value.object.get("role") orelse return error.InvalidSecondwindRequest;
+        const content_value = value.object.get("content") orelse return error.InvalidSecondwindRequest;
+        if (role_value != .string or content_value != .string) return error.InvalidSecondwindRequest;
+        messages[i] = .{
+            .role = providers.Role.fromSlice(role_value.string) orelse return error.InvalidSecondwindRequest,
+            .content = try allocator.dupe(u8, content_value.string),
+            .name = try duplicateOptional(allocator, value.object.get("name")),
+            .tool_call_id = try duplicateOptional(allocator, value.object.get("tool_call_id")),
+        };
+    }
+    var tools: ?[]providers.ToolSpec = null;
+    if (parsed.value.object.get("tools")) |tools_value| {
+        if (tools_value != .array) return error.InvalidSecondwindRequest;
+        tools = try allocator.alloc(providers.ToolSpec, tools_value.array.items.len);
+        for (tools_value.array.items, 0..) |value, i| {
+            if (value != .object) return error.InvalidSecondwindRequest;
+            tools.?[i] = .{
+                .name = try duplicateRequired(allocator, value.object.get("name")),
+                .description = try duplicateRequired(allocator, value.object.get("description")),
+                .parameters_json = try duplicateRequired(allocator, value.object.get("parameters_json")),
+            };
+        }
+    }
+    return .{
+        .messages = messages,
+        .session_id = try duplicateOptional(allocator, parsed.value.object.get("session_id")),
+        .model = try duplicateRequired(allocator, parsed.value.object.get("model")),
+        .temperature = numberOrDefault(parsed.value.object.get("temperature"), 0.7),
+        .max_tokens = uintOrNull(parsed.value.object.get("max_tokens")),
+        .tools = if (tools) |items| items else null,
+        .timeout_secs = uintOrDefault(parsed.value.object.get("timeout_secs"), 0),
+        .reasoning_effort = try duplicateOptional(allocator, parsed.value.object.get("reasoning_effort")),
+        .include_reasoning = boolOrNull(parsed.value.object.get("include_reasoning")),
+    };
+}
+
+fn duplicateRequired(allocator: std.mem.Allocator, value: ?std.json.Value) ![]u8 {
+    const v = value orelse return error.InvalidSecondwindRequest;
+    if (v != .string) return error.InvalidSecondwindRequest;
+    return allocator.dupe(u8, v.string);
+}
+fn duplicateOptional(allocator: std.mem.Allocator, value: ?std.json.Value) !?[]u8 {
+    const v = value orelse return null;
+    if (v != .string) return error.InvalidSecondwindRequest;
+    return try allocator.dupe(u8, v.string);
+}
+fn numberOrDefault(value: ?std.json.Value, fallback: f64) f64 {
+    const v = value orelse return fallback;
+    return switch (v) { .float => |n| n, .integer => |n| @floatFromInt(n), else => fallback };
+}
+fn uintOrNull(value: ?std.json.Value) ?u32 {
+    const v = value orelse return null;
+    return switch (v) { .integer => |n| if (n >= 0 and n <= std.math.maxInt(u32)) @intCast(n) else null, else => null };
+}
+fn uintOrDefault(value: ?std.json.Value, fallback: u64) u64 {
+    const v = value orelse return fallback;
+    return switch (v) { .integer => |n| if (n >= 0) @intCast(n) else fallback, else => fallback };
+}
+fn boolOrNull(value: ?std.json.Value) ?bool {
+    const v = value orelse return null;
+    return switch (v) { .bool => |b| b, else => null };
+}
+
+test "wire adapter declines multimodal requests" {
+    const request = providers.ChatRequest{ .messages = &.{.{ .role = .user, .content = "x", .content_parts = &.{} }}, .model = "m" };
+    try std.testing.expectError(error.UnsupportedMultimodalRequest, serializeRequest(std.testing.allocator, request));
+}
+
+test "wire adapter round trips supported request metadata" {
+    const request = providers.ChatRequest{ .messages = &.{providers.ChatMessage.user("x")}, .session_id = "session", .model = "m", .temperature = 0.2, .max_tokens = 42, .tools = &.{.{ .name = "lookup", .description = "look up data", .parameters_json = "{}" }}, .timeout_secs = 9, .reasoning_effort = "low", .include_reasoning = true };
     const json = try serializeRequest(std.testing.allocator, request);
     defer std.testing.allocator.free(json);
     const decoded = try deserializeRequest(std.testing.allocator, json);
@@ -111,5 +199,5 @@ fn serializeRequest(allocator: std.mem.Allocator, request: providers.ChatRequest
     try std.testing.expectEqual(@as(u64, 9), decoded.timeout_secs);
     try std.testing.expectEqual(@as(usize, 1), decoded.tools.?.len);
     try std.testing.expectEqualStrings("lookup", decoded.tools.?[0].name);
-    try std.testing.try std.testing.expectEqualStrings("{}", decoded.tools.?[0].parameters_json);
+    try std.testing.expectEqualStrings("{}", decoded.tools.?[0].parameters_json);
 }
