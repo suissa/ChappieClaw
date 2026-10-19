@@ -70,8 +70,10 @@ pub const Record = struct {
 pub fn Gateway(comptime capacity: usize) type {
     return struct {
         const Self = @This();
-
-        records: [capacity]Record = undefined,
+        // Keep the zero-capacity specialization representable to Zig's type system.
+        // The public admission checks still make Gateway(0) fail closed before any
+        // record is written; the extra slot is never logically usable.
+        records: [if (capacity == 0) 1 else capacity]Record = undefined,
         len: usize = 0,
         next_sequence: u64 = 1,
         next_request_id: u64 = 1,
@@ -83,7 +85,7 @@ pub fn Gateway(comptime capacity: usize) type {
             candidate: []const u8,
             validation: Validation,
         ) error{AuditCapacityExceeded}!Request {
-            if (self.len == capacity) return error.AuditCapacityExceeded;
+            if (self.len >= capacity) return error.AuditCapacityExceeded;
 
             const request_id = self.next_request_id;
             self.next_request_id += 1;
@@ -127,7 +129,7 @@ pub fn Gateway(comptime capacity: usize) type {
             schema_valid: bool,
             tool_authorized: bool,
         ) error{AuditCapacityExceeded}!Response {
-            if (self.len == capacity) return error.AuditCapacityExceeded;
+            if (self.len >= capacity) return error.AuditCapacityExceeded;
 
             const accepted = schema_valid and (kind != .tool_call or tool_authorized);
             self.append(.{
@@ -186,6 +188,11 @@ fn fingerprint(bytes: []const u8) u64 {
         hash *%= 0x100000001b3;
     }
     return hash;
+}
+
+test "zero capacity fails closed without an empty Zig array type" {
+    var gateway = Gateway(0){};
+    try std.testing.expectError(error.AuditCapacityExceeded, gateway.beforeInference(1, "original", "small", .{}));
 }
 
 test "only validated net reductions replace the original request" {
