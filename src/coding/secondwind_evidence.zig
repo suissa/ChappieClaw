@@ -224,7 +224,7 @@ test "request coverage rejects metadata changes even when tool text is unchanged
         .rewrite = Fake.nullRewrite,
         .free = Fake.noFree,
     };
-    const original = "{\\"model\\":\\"m\\",\\"messages\\":[{\\"role\\":\\"user\\",\\"content\\":\\"keep\\"},{\\"role\\":\\"tool\\",\\"content\\":\\"long\\"}]}";
-    const changed_model = "{\\"model\\":\\"other-model\\",\\"messages\\":[{\\"role\\":\\"user\\",\\"content\\":\\"keep\\"},{\\"role\\":\\"tool\\",\\"content\\":\\"long\\"}]}";
+    const original = "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"keep\"},{\"role\":\"tool\",\"content\":\"long\"}]}";
+    const changed_model = "{\"model\":\"other-model\",\"messages\":[{\"role\":\"user\",\"content\":\"keep\"},{\"role\":\"tool\",\"content\":\"long\"}]}";
     try std.testing.expect(verifyRequestCoverage(std.testing.allocator, api, original, changed_model, "m", true, true) == null);
 }
