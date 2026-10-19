@@ -1,15 +1,15 @@
 //! Thin, opt-in binding to secondwind's versioned C ABI.
 //!
-//! This module deliberately accepts an injected symbol table instead of linking
-//! secondwind by default. The host is responsible for loading the matching native
-//! library and passing its exported functions. No transformation is enabled unless
-//! an application explicitly creates a Session and calls rewriteJson.
+//! The API can be injected by a host or resolved from an explicitly opened shared
+//! library with LoadedLibrary.open. No library is loaded and no transformation is
+//! enabled by default; applications must opt in and close sessions before the library.
 //!
 //! Pinned contract: secondwind C ABI v1 (workspace/package version 0.3.2).
 //! JSON payloads are UTF-8. Buffers returned by the ABI belong to secondwind and
 //! must be released exactly once with sw_free(pointer, length).
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const expected_abi_version: u32 = 1;
 pub const max_response_bytes: usize = 16 * 1024 * 1024;
@@ -128,3 +128,60 @@ fn testRewrite(_: ?*anyopaque, _: [*]const u8, _: usize, _: *usize) callconv(.c)
     return null;
 }
 fn testFree(_: ?[*]u8, _: usize) callconv(.c) void {}
+
+
+/// Owns an explicitly opened shared library and the resolved secondwind ABI.
+/// Keep this value alive until every Session created from `api` has been deinitialized.
+/// The loader never searches implicit paths or loads a library automatically.
+const DynamicLibrary = if (builtin.os.tag == .windows) struct {
+    // Zig 0.16 removed std.DynLib's Windows backend. Keep the module compilable
+    // on Windows and require the host to inject an OS-specific symbol resolver.
+    pub fn open(_: []const u8) error{UnsupportedPlatform}!@This() {
+        return error.UnsupportedPlatform;
+    }
+    pub fn close(_: *@This()) void {}
+    pub fn lookup(_: *@This(), comptime T: type, _: [:0]const u8) ?T {
+        return null;
+    }
+} else std.DynLib;
+
+pub const LoadedLibrary = struct {
+    library: DynamicLibrary,
+    api: Api,
+
+    pub fn open(path: []const u8) !LoadedLibrary {
+        var library = try DynamicLibrary.open(path);
+        errdefer library.close();
+
+        const abi_version = library.lookup(*const fn () callconv(.c) u32, "sw_abi_version") orelse
+            return error.SecondwindMissingAbiVersion;
+        const compress = library.lookup(@TypeOf(@as(Api, undefined).compress), "sw_compress") orelse
+            return error.SecondwindMissingCompress;
+        const verify = library.lookup(@TypeOf(@as(Api, undefined).verify), "sw_verify") orelse
+            return error.SecondwindMissingVerify;
+        const session_new = library.lookup(@TypeOf(@as(Api, undefined).sessionNew), "sw_session_new") orelse
+            return error.SecondwindMissingSessionNew;
+        const session_free = library.lookup(@TypeOf(@as(Api, undefined).sessionFree), "sw_session_free") orelse
+            return error.SecondwindMissingSessionFree;
+        const rewrite = library.lookup(@TypeOf(@as(Api, undefined).rewrite), "sw_rewrite") orelse
+            return error.SecondwindMissingRewrite;
+        const free = library.lookup(@TypeOf(@as(Api, undefined).free), "sw_free") orelse
+            return error.SecondwindMissingFree;
+
+        const api = Api{
+            .abiVersion = abi_version,
+            .compress = compress,
+            .verify = verify,
+            .sessionNew = session_new,
+            .sessionFree = session_free,
+            .rewrite = rewrite,
+            .free = free,
+        };
+        try api.validate();
+        return .{ .library = library, .api = api };
+    }
+
+    pub fn close(self: *LoadedLibrary) void {
+        self.library.close();
+    }
+};
