@@ -14,7 +14,7 @@ The module is exported by `src/coding.zig`, which is already part of the root te
 
 ## Scope and limitation
 
-This verifies the gateway's contract and safety behavior inside ChappieClaw. It does **not** claim that the gateway is already intercepting real provider requests or responses. The current implementation is a tested boundary primitive; wiring it into the agent/provider inference path requires a separate change around the serialized request and response lifecycle.
+This verifies the gateway contract and documents its integration into the agent turn loop. Blocking and streaming provider requests pass through the request-admission hook; direct text/tool boundaries and buffered streaming output pass through response gates. The optional transformer callback is not configured by default.
 
 The gateway does not independently prove that a transformation is lossless. Its caller must supply valid evidence for coverage, policy, cache compatibility, and token counts. FNV-1a fingerprints are for correlation only, not cryptographic integrity or authorization.
 
@@ -23,4 +23,15 @@ The gateway does not independently prove that a transformation is lossless. Its 
 
 The agent turn loop invokes the provider-neutral Context Gateway before returning a direct text response and before dispatching each parsed tool call. Direct text is admitted through the text-response boundary. Tool arguments must parse as a JSON object and the tool name must be non-empty; rejected calls are converted into failed tool results and are not executed.
 
-This is a structural gate, not an authorization grant. The existing `executeTool` and security-policy path remains responsible for tool authorization. The gateway is scoped to one model iteration with bounded audit capacity. No prompt transformation is applied yet: the repository has no configured lossless context transformer to supply a candidate, so outbound provider messages remain unchanged. Streaming chunks are not gated before emission; that requires a separate buffering/streaming policy to avoid exposing unvalidated partial output.
+This is a structural gate, not an authorization grant. The existing `executeTool` and security-policy path remains responsible for tool authorization. The gateway is scoped to one model iteration with bounded audit capacity. If no transformer callback is configured, outbound provider messages remain unchanged. Streaming chunks are buffered and are not exposed until the complete response passes the response gate.
+
+
+## Provider-boundary integration
+
+`Agent.setContextTransformer(callback, ctx)` installs an optional provider-neutral adapter. For every blocking `chat()` and `streamChat()` attempt—including retry attempts—the agent passes the exact typed `ChatRequest` through this callback before the provider call. The adapter may return a `Candidate` containing a replacement request and its validation evidence. The runtime applies the Context Gateway admission rules; rejected, missing, or callback-error candidates fall back to the original request. Audit-capacity errors stop the call rather than silently bypassing the gateway.
+
+The callback is the integration seam for a separate context condenser. This repository does not embed ChappieContextCondenser, make network calls to it, or claim that a candidate's `lossless` flag is independently proven. An adapter must produce evidence from its own validation process and must keep candidate slices alive for the supplied allocator's lifetime (normally the current turn arena). The gate also requires provider/model, session scope, tools, generation settings, and token budgets to remain identical; only the message context may change.
+
+Streaming provider chunks are now buffered by `context_stream_gate.Gate`. The downstream callback receives one validated text delta and a final chunk only after stream completion. If a streaming attempt fails and retries, its buffered partial output is discarded. Buffer allocation failure rejects publication rather than exposing a truncated answer. This strict mode increases time-to-first-token and buffers the complete output in memory.
+
+No context transformer is installed by default; behavior remains unchanged until the application configures one with `setContextTransformer`.

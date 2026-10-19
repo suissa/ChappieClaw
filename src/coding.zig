@@ -18,4 +18,5 @@ pub const context_request_gate = @import("coding/context_request_gate.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
+    _ = @import("coding/context_stream_gate_test.zig");
 }
