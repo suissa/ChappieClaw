@@ -14,7 +14,7 @@ For Anthropic-compatible providers, use the documented Anthropic Messages route.
 
 ## Native C ABI adapter
 
-`src/coding/secondwind_ffi.zig` defines an opt-in, provider-neutral wrapper around the upstream C ABI. It is pinned to **ABI version 1** and the current upstream package/workspace version **0.3.2**. The host must load the matching native library and inject its exported symbols into `secondwind_ffi.Api`; this module intentionally does not introduce a hard link or enable transformation by default.
+`src/coding/secondwind_ffi.zig` defines an opt-in, provider-neutral wrapper around the upstream C ABI. It is pinned to **ABI version 1** and the current upstream package/workspace version **0.3.2**. `secondwind_ffi.LoadedLibrary.open(path)` explicitly opens a library and resolves the required symbols, validates ABI version 1, and closes the library on missing symbols or version mismatch. Hosts can also inject an `Api` directly for custom loaders. No library is loaded automatically and transformation remains opt-in. Zig 0.16's `std.DynLib` loader is used on supported non-Windows targets; Windows currently requires a host-provided `LoadLibrary`/`GetProcAddress` resolver and injected `Api`.
 
 The wrapper covers:
 
@@ -41,6 +41,7 @@ The FFI wrapper is transport and memory-ownership glue, not a proof adapter. In 
 ## Validation checklist
 
 - [ ] Confirm the installed shared library exports ABI version 1 and all required symbols.
+- [ ] Keep `LoadedLibrary` alive until every session created from its API has been deinitialized; never call function pointers after closing the library.
 - [ ] Run Zig 0.16.0 formatting, tests, build, and coding-contract CI.
 - [ ] Add host-loader integration tests for the actual library artifact on supported OS/architectures.
 - [ ] Verify malformed/error JSON and output-size-limit behavior.
