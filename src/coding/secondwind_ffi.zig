@@ -150,7 +150,7 @@ pub const LoadedLibrary = struct {
     api: Api,
 
     pub fn open(path: []const u8) !LoadedLibrary {
-        var library = try std.DynLib.open(path);
+        var library = try DynamicLibrary.open(path);
         errdefer library.close();
 
         const abi_version = library.lookup(*const fn () callconv(.c) u32, "sw_abi_version") orelse
