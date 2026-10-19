@@ -50,15 +50,16 @@ pub fn admit(
         .candidate_tokens = c.candidate_tokens,
     };
 
-    const original_marker = try fingerprintMarker(std.heap.page_allocator, original, original_bytes);
-    defer std.heap.page_allocator.free(original_marker);
-    const candidate_marker = try fingerprintMarker(std.heap.page_allocator, c.request, candidate_bytes);
-    defer std.heap.page_allocator.free(candidate_marker);
+    // Audit markers carry only a fixed-size request fingerprint. Allocating a
+    // marker proportional to prompt size duplicated potentially huge payloads
+    // without adding audit information.
+    const original_marker = fingerprintMarker(original);
+    const candidate_marker = fingerprintMarker(c.request);
 
     const admitted = try gateway.beforeInference(
         intent_id,
-        original_marker,
-        candidate_marker,
+        &original_marker,
+        &candidate_marker,
         validation,
     );
 
@@ -101,12 +102,9 @@ fn requestMetadataCompatible(original: providers.ChatRequest, candidate: provide
         toolsEqual(original.tools, candidate.tools);
 }
 
-fn fingerprintMarker(allocator: std.mem.Allocator, request: providers.ChatRequest, size: usize) ![]u8 {
-    const marker = try allocator.alloc(u8, @max(@as(usize, 1), size));
+fn fingerprintMarker(request: providers.ChatRequest) [@sizeOf(u64)]u8 {
     const hash = fingerprintRequest(request);
-    const hash_bytes = std.mem.asBytes(&hash);
-    for (marker, 0..) |*byte, index| byte.* = hash_bytes[index % hash_bytes.len];
-    return marker;
+    return @bitCast(hash);
 }
 
 fn fingerprintRequest(request: providers.ChatRequest) u64 {
@@ -169,6 +167,30 @@ fn requestSize(request: providers.ChatRequest) usize {
         for (tools) |tool| size += tool.name.len + tool.description.len + tool.parameters_json.len;
     }
     return size;
+}
+
+test "audit fingerprint marker remains fixed-size for large request content" {
+    const huge = "x" ** 1_000_000;
+    const request = providers.ChatRequest{
+        .messages = &.{providers.ChatMessage.user(huge)},
+        .model = "model",
+    };
+
+    const marker = fingerprintMarker(request);
+    try std.testing.expectEqual(@as(usize, @sizeOf(u64)), marker.len);
+}
+
+test "audit fingerprint changes when request content changes" {
+    const first = providers.ChatRequest{
+        .messages = &.{providers.ChatMessage.user("first")},
+        .model = "model",
+    };
+    const second = providers.ChatRequest{
+        .messages = &.{providers.ChatMessage.user("second")},
+        .model = "model",
+    };
+
+    try std.testing.expect(!std.mem.eql(u8, &fingerprintMarker(first), &fingerprintMarker(second)));
 }
 
 test "typed request gate rejects unproven candidates" {
