@@ -7,6 +7,7 @@
 const std = @import("std");
 const ffi = @import("secondwind_ffi.zig");
 const compatible = @import("../providers/compatible.zig");
+const factory = @import("../providers/factory.zig");
 
 pub const Gateway = compatible.SecondwindGateway;
 
@@ -62,6 +63,25 @@ pub const Runtime = struct {
             self.policy_allowed,
             self.cache_compatible,
         );
+    }
+
+    /// Attach to a provider holder only when its active variant is compatible.
+    /// Other provider families return an explicit error instead of silently
+    /// claiming that Secondwind is active.
+    pub fn attachHolder(self: *Runtime, holder: *factory.ProviderHolder) !void {
+        switch (holder.*) {
+            .compatible => |*provider| self.attach(provider),
+            else => return error.SecondwindRequiresOpenAiCompatibleProvider,
+        }
+    }
+
+    /// Detach this runtime from a provider holder before deinitializing the
+    /// owner. Call only after in-flight provider requests have completed.
+    pub fn detachHolder(_: *Runtime, holder: *factory.ProviderHolder) void {
+        switch (holder.*) {
+            .compatible => |*provider| provider.disableSecondwind(),
+            else => {},
+        }
     }
 
     /// Stop future use through this owner. Existing provider pointers are not
