@@ -182,9 +182,11 @@ fn duplicateRequired(allocator: std.mem.Allocator, value: ?std.json.Value) ![]u8
 }
 fn duplicateOptional(allocator: std.mem.Allocator, value: ?std.json.Value) !?[]u8 {
     const v = value orelse return null;
-    if (v == .null) return null;
-    if (v != .string) return error.InvalidSecondwindRequest;
-    return try allocator.dupe(u8, v.string);
+    return switch (v) {
+        .null => null,
+        .string => |s| try allocator.dupe(u8, s),
+        else => error.InvalidSecondwindRequest,
+    };
 }
 fn numberOrDefault(value: ?std.json.Value, fallback: f64) f64 {
     const v = value orelse return fallback;
