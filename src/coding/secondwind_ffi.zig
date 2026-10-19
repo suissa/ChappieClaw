@@ -109,8 +109,10 @@ pub const Session = struct {
 };
 
 fn parseVerificationResult(allocator: std.mem.Allocator, output_json: []const u8) !bool {
-    var parsed = std.json.parseFromSlice(std.json.Value, allocator, output_json, .{}) catch
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, output_json, .{}) catch |parse_err| {
+        _ = parse_err;
         return error.InvalidSecondwindVerificationResponse;
+    };
     defer parsed.deinit();
     if (parsed.value != .object) return error.InvalidSecondwindVerificationResponse;
     const ok = parsed.value.object.get("ok") orelse return error.InvalidSecondwindVerificationResponse;
