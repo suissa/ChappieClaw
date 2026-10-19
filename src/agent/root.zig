@@ -2920,6 +2920,8 @@ pub const Agent = struct {
         // not cover it.
         var summary_arena = std.heap.ArenaAllocator.init(self.allocator);
         defer summary_arena.deinit();
+        var summary_context_gateway = context_gateway_mod.Gateway(512){};
+        const summary_context_intent_id: u128 = std.hash.Wyhash.hash(0, effective_user_message);
         const send_summary_messages: []ChatMessage = if (self.redactor) |r|
             try redactMessagesForProvider(summary_arena.allocator(), summary_messages, r)
         else
@@ -2930,7 +2932,7 @@ pub const Agent = struct {
         self.logLlmRequest(self.max_tool_iterations + 1, 1, self.model_name, send_summary_messages, false, false);
         var summary_response = self.provider.chat(
             self.allocator,
-            try self.prepareContextRequest(summary_arena.allocator(), &context_gateway, @as(u64, iteration) + 1, context_intent_id, .{
+            try self.prepareContextRequest(summary_arena.allocator(), &summary_context_gateway, @as(u64, iteration) + 1, summary_context_intent_id, .{
                 .messages = send_summary_messages,
                 .session_id = self.memory_session_id,
                 .model = self.model_name,
