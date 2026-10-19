@@ -128,6 +128,9 @@ fn onlyToolOutputContentChanged(
         const before_content = before.object.get("content") orelse return false;
         const after_content_ptr = after.object.getPtr("content") orelse return false;
         if (std.mem.eql(u8, before_role.string, "tool")) {
+            // Only plain text tool output is eligible; multimodal/structured content
+            // is never rewritten by this adapter.
+            if (before_content != .string or after_content_ptr.* != .string) return false;
             after_content_ptr.* = before_content;
         } else if (!jsonValuesEqual(before_content, after_content_ptr.*)) {
             return false;
