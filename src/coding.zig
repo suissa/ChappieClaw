@@ -16,6 +16,8 @@ pub const context_gateway = @import("coding/context_gateway.zig");
 pub const context_stream_gate = @import("coding/context_stream_gate.zig");
 pub const context_request_gate = @import("coding/context_request_gate.zig");
 pub const secondwind_ffi = @import("coding/secondwind_ffi.zig");
+pub const secondwind_pipeline = @import("coding/secondwind_pipeline.zig");
+pub const secondwind_transformer = @import("coding/secondwind_transformer.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

@@ -71,7 +71,7 @@ pub fn Gateway(comptime capacity: usize) type {
     return struct {
         const Self = @This();
 
-        records: [capacity]Record = undefined,
+        records: [if (capacity == 0) 1 else capacity]Record = undefined,
         len: usize = 0,
         next_sequence: u64 = 1,
         next_request_id: u64 = 1,
@@ -97,6 +97,7 @@ pub fn Gateway(comptime capacity: usize) type {
 
             const chosen = if (accept) candidate else original;
             self.append(.{
+                .sequence = 0,
                 .request_id = request_id,
                 .intent_id = intent_id,
                 .phase = if (accept) .request_admitted else .request_fallback,
@@ -131,6 +132,7 @@ pub fn Gateway(comptime capacity: usize) type {
 
             const accepted = schema_valid and (kind != .tool_call or tool_authorized);
             self.append(.{
+                .sequence = 0,
                 .request_id = request_id,
                 .intent_id = intent_id,
                 .phase = if (accepted) .response_admitted else .response_rejected,
