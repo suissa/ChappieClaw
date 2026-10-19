@@ -28,6 +28,7 @@ pub const Runtime = struct {
     policy_allowed: bool,
     cache_compatible: bool,
     active: bool = true,
+    attached_holders: std.ArrayListUnmanaged(*factory.ProviderHolder) = .empty,
 
     /// Opens only the exact library path supplied by the host and creates one
     /// session. On session creation failure the library is immediately closed.
@@ -69,18 +70,37 @@ pub const Runtime = struct {
     /// Other provider families return an explicit error instead of silently
     /// claiming that Secondwind is active.
     pub fn attachHolder(self: *Runtime, holder: *factory.ProviderHolder) !void {
+        if (!self.active) return error.SecondwindRuntimeInactive;
+
         switch (holder.*) {
             .compatible => |*provider| self.attach(provider),
             else => return error.SecondwindRequiresOpenAiCompatibleProvider,
         }
+
+        for (self.attached_holders.items) |attached| {
+            if (attached == holder) return;
+        }
+        self.attached_holders.append(self.allocator, holder) catch |err| {
+            switch (holder.*) {
+                .compatible => |*provider| provider.disableSecondwind(),
+                else => {},
+            }
+            return err;
+        };
     }
 
-    /// Detach this runtime from a provider holder before deinitializing the
-    /// owner. Call only after in-flight provider requests have completed.
-    pub fn detachHolder(_: *Runtime, holder: *factory.ProviderHolder) void {
+    /// Detach a provider holder and remove its borrowed pointer from the owner.
+    /// Call only after in-flight provider requests have completed.
+    pub fn detachHolder(self: *Runtime, holder: *factory.ProviderHolder) void {
         switch (holder.*) {
             .compatible => |*provider| provider.disableSecondwind(),
             else => {},
+        }
+        for (self.attached_holders.items, 0..) |attached, index| {
+            if (attached == holder) {
+                _ = self.attached_holders.swapRemove(index);
+                break;
+            }
         }
     }
 
@@ -90,12 +110,21 @@ pub const Runtime = struct {
         self.active = false;
     }
 
-    /// Required order: providers detached by their owner first, then session,
-    /// then shared library. Never close the library while a session is alive.
+    /// Detach all registered holders before releasing the session and library.
+    /// The host must still stop in-flight inference and keep attached holders
+    /// alive until this method returns. Providers attached through attach()
+    /// directly (rather than attachHolder()) remain the caller's responsibility.
     pub fn deinit(self: *Runtime) void {
+        self.active = false;
+        for (self.attached_holders.items) |holder| {
+            switch (holder.*) {
+                .compatible => |*provider| provider.disableSecondwind(),
+                else => {},
+            }
+        }
+        self.attached_holders.deinit(self.allocator);
         self.session.deinit();
         self.library.close();
-        self.active = false;
     }
 };
 
