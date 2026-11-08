@@ -291,24 +291,34 @@ test "token savings without byte savings and byte savings without token savings 
     const same_size = "candidate";
     var gateway = Gateway(2){};
 
-    const no_byte_saving = try gateway.beforeInference(1, original, same_size, .{
-        .lossless = true,
-        .coverage_complete = true,
-        .policy_allowed = true,
-        .cache_compatible = true,
-        .original_tokens = 20,
-        .candidate_tokens = 5,
-    });
+    const no_byte_saving = try gateway.beforeInference(
+        1,
+        original,
+        same_size,
+        .{
+            .lossless = true,
+            .coverage_complete = true,
+            .policy_allowed = true,
+            .cache_compatible = true,
+            .original_tokens = 20,
+            .candidate_tokens = 5,
+        },
+    );
     try std.testing.expectEqual(Decision.original_passthrough, no_byte_saving.decision);
 
-    const no_token_saving = try gateway.beforeInference(2, "original payload", "short", .{
-        .lossless = true,
-        .coverage_complete = true,
-        .policy_allowed = true,
-        .cache_compatible = true,
-        .original_tokens = 5,
-        .candidate_tokens = 5,
-    });
+    const no_token_saving = try gateway.beforeInference(
+        2,
+        "original payload",
+        "short",
+        .{
+            .lossless = true,
+            .coverage_complete = true,
+            .policy_allowed = true,
+            .cache_compatible = true,
+            .original_tokens = 5,
+            .candidate_tokens = 5,
+        },
+    );
     try std.testing.expectEqual(Decision.original_passthrough, no_token_saving.decision);
     try std.testing.expectEqualStrings("original payload", no_token_saving.bytes);
 }
@@ -317,14 +327,19 @@ test "zero-capacity gateway rejects before recording or accepting" {
     var gateway = Gateway(0){};
     try std.testing.expectError(
         error.AuditCapacityExceeded,
-        gateway.beforeInference(1, "original", "short", .{
-            .lossless = true,
-            .coverage_complete = true,
-            .policy_allowed = true,
-            .cache_compatible = true,
-            .original_tokens = 5,
-            .candidate_tokens = 1,
-        }),
+        gateway.beforeInference(
+            1,
+            "original",
+            "short",
+            .{
+                .lossless = true,
+                .coverage_complete = true,
+                .policy_allowed = true,
+                .cache_compatible = true,
+                .original_tokens = 5,
+                .candidate_tokens = 1,
+            },
+        ),
     );
     try std.testing.expectEqual(@as(usize, 0), gateway.audit().len);
 }
