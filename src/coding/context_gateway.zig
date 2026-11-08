@@ -261,7 +261,6 @@ test "audit retains metadata but never payload bytes" {
     try std.testing.expect(!@hasField(Record, "bytes"));
 }
 
-
 test "each independent evidence gate fails closed" {
     const original = "{\"payload\":\"long original value\"}";
     const candidate = "{\"p\":\"short\"}";
