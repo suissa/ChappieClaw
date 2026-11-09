@@ -9,6 +9,7 @@ on:
   pull_request:
     branches:
       - main
+      - "feat/secondwind-tool-output-boundary"
   workflow_dispatch:
 
 permissions:

@@ -28,8 +28,8 @@ pub const CommandSpec = struct {
 
 pub fn compileCommand(language: Language) ?CommandSpec {
     return switch (language) {
-        .zig => .{ .executable = "zig", .args = &.{ "build" } },
-        .rust => .{ .executable = "cargo", .args = &.{ "check" } },
+        .zig => .{ .executable = "zig", .args = &.{"build"} },
+        .rust => .{ .executable = "cargo", .args = &.{"check"} },
         .go => .{ .executable = "go", .args = &.{ "build", "./..." } },
         .typescript => .{ .executable = "npx", .args = &.{ "tsc", "--noEmit" } },
         .unknown => null,
@@ -39,7 +39,7 @@ pub fn compileCommand(language: Language) ?CommandSpec {
 pub fn testCommand(language: Language) ?CommandSpec {
     return switch (language) {
         .zig => .{ .executable = "zig", .args = &.{ "build", "test", "--summary", "all" } },
-        .rust => .{ .executable = "cargo", .args = &.{ "test" } },
+        .rust => .{ .executable = "cargo", .args = &.{"test"} },
         .go => .{ .executable = "go", .args = &.{ "test", "./..." } },
         .typescript => .{ .executable = "npm", .args = &.{ "test", "--", "--runInBand" } },
         .unknown => null,
