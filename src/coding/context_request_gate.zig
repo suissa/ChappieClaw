@@ -221,7 +221,7 @@ fn requestSize(request: providers.ChatRequest) usize {
 test "typed request gate rejects unproven candidates" {
     var gateway = gateway_mod.Gateway(8){};
     const original = providers.ChatRequest{
-        .messages = &.{ providers.ChatMessage.user("long context") },
+        .messages = &.{providers.ChatMessage.user("long context")},
         .model = "model",
     };
     const candidate = Candidate{
@@ -281,7 +281,6 @@ test "typed request gate rejects candidates that alter provider metadata" {
     try std.testing.expect(!result.transformed);
     try std.testing.expectEqualStrings("model", result.request.model);
 }
-
 
 test "typed request gate never rewrites user intent even with claimed proof" {
     var gateway = gateway_mod.Gateway(8){};

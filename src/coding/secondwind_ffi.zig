@@ -47,6 +47,16 @@ pub const Api = struct {
         return copyOwned(self, allocator, output, output_len);
     }
 
+    /// Verifies a candidate wire against a certificate hash using secondwind verifier.
+    /// Malformed JSON, missing ok, and non-boolean results are errors; callers must fail closed.
+    pub fn verifyWire(self: Api, allocator: std.mem.Allocator, wire: []const u8, hash: []const u8) !bool {
+        const input = try std.json.Stringify.valueAlloc(allocator, .{ .wire = wire, .hash = hash }, .{});
+        defer allocator.free(input);
+        const output = try self.verifyJson(allocator, input);
+        defer allocator.free(output);
+        return parseVerificationResult(allocator, output);
+    }
+
     fn copyOwned(
         self: Api,
         allocator: std.mem.Allocator,
@@ -98,6 +108,24 @@ pub const Session = struct {
     }
 };
 
+fn parseVerificationResult(allocator: std.mem.Allocator, output_json: []const u8) !bool {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, output_json, .{}) catch
+        return error.InvalidSecondwindVerificationResponse;
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.InvalidSecondwindVerificationResponse;
+    const ok = parsed.value.object.get("ok") orelse return error.InvalidSecondwindVerificationResponse;
+    if (ok != .bool) return error.InvalidSecondwindVerificationResponse;
+    return ok.bool;
+}
+
+test "verification response must contain a boolean ok field" {
+    const allocator = std.testing.allocator;
+    try std.testing.expect(try parseVerificationResult(allocator, "{\"ok\":true}"));
+    try std.testing.expect(!(try parseVerificationResult(allocator, "{\"ok\":false}")));
+    try std.testing.expectError(error.InvalidSecondwindVerificationResponse, parseVerificationResult(allocator, "{}"));
+    try std.testing.expectError(error.InvalidSecondwindVerificationResponse, parseVerificationResult(allocator, "{\"ok\":1}"));
+    try std.testing.expectError(error.InvalidSecondwindVerificationResponse, parseVerificationResult(allocator, "not-json"));
+}
 test "rejects an ABI version mismatch before using the library" {
     const fake = Api{
         .abiVersion = testWrongAbiVersion,
@@ -128,7 +156,6 @@ fn testRewrite(_: ?*anyopaque, _: [*]const u8, _: usize, _: *usize) callconv(.c)
     return null;
 }
 fn testFree(_: ?[*]u8, _: usize) callconv(.c) void {}
-
 
 /// Owns an explicitly opened shared library and the resolved secondwind ABI.
 /// Keep this value alive until every Session created from `api` has been deinitialized.

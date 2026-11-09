@@ -71,7 +71,7 @@ pub fn Gateway(comptime capacity: usize) type {
     return struct {
         const Self = @This();
 
-        records: [capacity]Record = undefined,
+        records: [if (capacity == 0) 1 else capacity]Record = undefined,
         len: usize = 0,
         next_sequence: u64 = 1,
         next_request_id: u64 = 1,
@@ -97,6 +97,7 @@ pub fn Gateway(comptime capacity: usize) type {
 
             const chosen = if (accept) candidate else original;
             self.append(.{
+                .sequence = 0,
                 .request_id = request_id,
                 .intent_id = intent_id,
                 .phase = if (accept) .request_admitted else .request_fallback,
@@ -131,6 +132,7 @@ pub fn Gateway(comptime capacity: usize) type {
 
             const accepted = schema_valid and (kind != .tool_call or tool_authorized);
             self.append(.{
+                .sequence = 0,
                 .request_id = request_id,
                 .intent_id = intent_id,
                 .phase = if (accepted) .response_admitted else .response_rejected,
@@ -257,4 +259,108 @@ test "audit retains metadata but never payload bytes" {
     try std.testing.expectEqual(@as(u32, 22), record.original_bytes);
     try std.testing.expectEqual(@as(u32, 16), record.candidate_bytes);
     try std.testing.expect(!@hasField(Record, "bytes"));
+}
+
+test "each independent evidence gate fails closed" {
+    const original = "{\"payload\":\"long original value\"}";
+    const candidate = "{\"p\":\"short\"}";
+    const valid = Validation{
+        .lossless = true,
+        .coverage_complete = true,
+        .policy_allowed = true,
+        .cache_compatible = true,
+        .original_tokens = 20,
+        .candidate_tokens = 5,
+    };
+
+    inline for (.{ "lossless", "coverage_complete", "policy_allowed", "cache_compatible" }) |field| {
+        var gateway = Gateway(1){};
+        var rejected = valid;
+        @field(rejected, field) = false;
+        const result = try gateway.beforeInference(1, original, candidate, rejected);
+        try std.testing.expectEqual(Decision.original_passthrough, result.decision);
+        try std.testing.expectEqualStrings(original, result.bytes);
+        try std.testing.expect(!gateway.audit()[0].accepted);
+        try std.testing.expectEqual(Phase.request_fallback, gateway.audit()[0].phase);
+    }
+}
+
+test "token savings without byte savings and byte savings without token savings are rejected" {
+    const original = "original";
+    const same_size = "candidate";
+    var gateway = Gateway(2){};
+
+    const no_byte_saving = try gateway.beforeInference(
+        1,
+        original,
+        same_size,
+        .{
+            .lossless = true,
+            .coverage_complete = true,
+            .policy_allowed = true,
+            .cache_compatible = true,
+            .original_tokens = 20,
+            .candidate_tokens = 5,
+        },
+    );
+    try std.testing.expectEqual(Decision.original_passthrough, no_byte_saving.decision);
+
+    const no_token_saving = try gateway.beforeInference(
+        2,
+        "original payload",
+        "short",
+        .{
+            .lossless = true,
+            .coverage_complete = true,
+            .policy_allowed = true,
+            .cache_compatible = true,
+            .original_tokens = 5,
+            .candidate_tokens = 5,
+        },
+    );
+    try std.testing.expectEqual(Decision.original_passthrough, no_token_saving.decision);
+    try std.testing.expectEqualStrings("original payload", no_token_saving.bytes);
+}
+
+test "zero-capacity gateway rejects before recording or accepting" {
+    var gateway = Gateway(0){};
+    try std.testing.expectError(
+        error.AuditCapacityExceeded,
+        gateway.beforeInference(
+            1,
+            "original",
+            "short",
+            .{
+                .lossless = true,
+                .coverage_complete = true,
+                .policy_allowed = true,
+                .cache_compatible = true,
+                .original_tokens = 5,
+                .candidate_tokens = 1,
+            },
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 0), gateway.audit().len);
+}
+
+test "audit sequences and request identifiers are monotonic across fallback and admission" {
+    var gateway = Gateway(3){};
+    const rejected = try gateway.beforeInference(10, "original payload", "short", .{});
+    const accepted = try gateway.beforeInference(11, "original payload", "short", .{
+        .lossless = true,
+        .coverage_complete = true,
+        .policy_allowed = true,
+        .cache_compatible = true,
+        .original_tokens = 8,
+        .candidate_tokens = 2,
+    });
+    try std.testing.expectEqual(Decision.original_passthrough, rejected.decision);
+    try std.testing.expectEqual(Decision.transformed, accepted.decision);
+    const records = gateway.audit();
+    try std.testing.expectEqual(@as(u64, 1), records[0].sequence);
+    try std.testing.expectEqual(@as(u64, 2), records[1].sequence);
+    try std.testing.expectEqual(@as(u64, 1), records[0].request_id);
+    try std.testing.expectEqual(@as(u64, 2), records[1].request_id);
+    try std.testing.expectEqual(@as(u128, 10), records[0].intent_id);
+    try std.testing.expectEqual(@as(u128, 11), records[1].intent_id);
 }
