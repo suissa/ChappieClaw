@@ -248,6 +248,49 @@ test "request pipeline preserves original when proof evidence is absent" {
     try std.testing.expectEqualStrings(original, result.request_json);
 }
 
+test "verified inference boundary fails closed when Secondwind rewrite is unavailable" {
+    const Fake = struct {
+        fn abi() callconv(.c) u32 { return ffi.expected_abi_version; }
+        fn nullBytes(_: [*]const u8, _: usize, _: *usize) callconv(.c) ?[*]u8 { return null; }
+        fn nullSession(_: [*]const u8, _: usize) callconv(.c) ?*anyopaque { return null; }
+        fn noSession(_: ?*anyopaque) callconv(.c) void {}
+        fn nullRewrite(_: ?*anyopaque, _: [*]const u8, _: usize, _: *usize) callconv(.c) ?[*]u8 { return null; }
+        fn noFree(_: ?[*]u8, _: usize) callconv(.c) void {}
+    };
+    const api = ffi.Api{
+        .abiVersion = Fake.abi,
+        .compress = Fake.nullBytes,
+        .verify = Fake.nullBytes,
+        .sessionNew = Fake.nullSession,
+        .sessionFree = Fake.noSession,
+        .rewrite = Fake.nullRewrite,
+        .free = Fake.noFree,
+    };
+    var session = ffi.Session{ .api = api, .handle = null };
+    var gateway = gateway_mod.Gateway(4){};
+    const original = "{\\"model\\":\\"m\\",\\"messages\\":[{\\"role\\":\\"tool\\",\\"content\\":\\"original tool output\\"}]}";
+
+    const result = try rewriteVerifiedForInference(
+        std.testing.allocator,
+        &session,
+        &gateway,
+        42,
+        original,
+        "test-model",
+        true,
+        true,
+    );
+    defer {
+        var owned = result;
+        owned.deinit(std.testing.allocator);
+    }
+
+    try std.testing.expect(!result.transformed);
+    try std.testing.expectEqualStrings(original, result.request_json);
+    try std.testing.expectEqualStrings("{}", result.stats_json);
+    try std.testing.expectEqual(@as(usize, 0), gateway.audit().len);
+}
+
 test "request diff permits only tool result content changes" {
     const allocator = std.testing.allocator;
     const original = "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"keep\"},{\"role\":\"tool\",\"content\":\"long\"}]}";
