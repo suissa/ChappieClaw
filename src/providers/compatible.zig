@@ -4,6 +4,11 @@ const root = @import("root.zig");
 const sse = @import("sse.zig");
 const error_classify = @import("error_classify.zig");
 const text_helpers = @import("text_helpers.zig");
+const secondwind_ffi = @import("../coding/secondwind_ffi.zig");
+const secondwind_pipeline = @import("../coding/secondwind_pipeline.zig");
+const context_gateway = @import("../coding/context_gateway.zig");
+
+pub const SecondwindGateway = context_gateway.Gateway(256);
 
 const Provider = root.Provider;
 const ChatMessage = root.ChatMessage;
@@ -225,6 +230,14 @@ pub const OpenAiCompatibleProvider = struct {
     max_streaming_prompt_bytes: ?usize = null,
     /// Optional compact JSON string of additional key-value pairs to merge into request bodies.
     extra_body_params: ?[]const u8 = null,
+    /// Explicit opt-in Secondwind request rewriting. The host owns the session,
+    /// gateway, and loaded library for at least as long as this provider is used.
+    /// Null defaults preserve the exact legacy provider path.
+    secondwind_session: ?*secondwind_ffi.Session = null,
+    secondwind_gateway: ?*SecondwindGateway = null,
+    secondwind_intent_id: u128 = 0,
+    secondwind_policy_allowed: bool = false,
+    secondwind_cache_compatible: bool = false,
     allocator: std.mem.Allocator,
 
     const think_open_tag = "<think>";
@@ -248,6 +261,34 @@ pub const OpenAiCompatibleProvider = struct {
             .user_agent = user_agent,
             .allocator = allocator,
         };
+    }
+
+    /// Explicitly opt this provider into verified Secondwind rewriting.
+    /// The caller owns the session and gateway and must keep them alive until
+    /// disableSecondwind() or provider teardown.
+    pub fn configureSecondwind(
+        self: *OpenAiCompatibleProvider,
+        session: *secondwind_ffi.Session,
+        gateway: *SecondwindGateway,
+        intent_id: u128,
+        policy_allowed: bool,
+        cache_compatible: bool,
+    ) void {
+        self.secondwind_session = session;
+        self.secondwind_gateway = gateway;
+        self.secondwind_intent_id = intent_id;
+        self.secondwind_policy_allowed = policy_allowed;
+        self.secondwind_cache_compatible = cache_compatible;
+    }
+
+    /// Restore the byte-preserving legacy path without taking ownership of
+    /// externally managed Secondwind resources.
+    pub fn disableSecondwind(self: *OpenAiCompatibleProvider) void {
+        self.secondwind_session = null;
+        self.secondwind_gateway = null;
+        self.secondwind_intent_id = 0;
+        self.secondwind_policy_allowed = false;
+        self.secondwind_cache_compatible = false;
     }
 
     fn validateUserAgent(user_agent: []const u8) bool {
@@ -1181,6 +1222,31 @@ pub const OpenAiCompatibleProvider = struct {
         allocator.free(messages);
     }
 
+
+    /// Apply verified Secondwind rewriting only when the host explicitly wires
+    /// both a live session and Context Gateway. Every failure is fail-closed.
+    fn rewriteBodyWithSecondwind(
+        self: *OpenAiCompatibleProvider,
+        allocator: std.mem.Allocator,
+        body: []const u8,
+        model: []const u8,
+    ) ![]u8 {
+        const session = self.secondwind_session orelse return allocator.dupe(u8, body);
+        const gateway = self.secondwind_gateway orelse return allocator.dupe(u8, body);
+        var result = secondwind_pipeline.rewriteVerifiedForInference(
+            allocator,
+            session,
+            gateway,
+            self.secondwind_intent_id,
+            body,
+            model,
+            self.secondwind_policy_allowed,
+            self.secondwind_cache_compatible,
+        ) catch return allocator.dupe(u8, body);
+        defer result.deinit(allocator);
+        return allocator.dupe(u8, result.request_json);
+    }
+
     fn streamChatImpl(
         ptr: *anyopaque,
         allocator: std.mem.Allocator,
@@ -1211,7 +1277,7 @@ pub const OpenAiCompatibleProvider = struct {
         const url = try self.chatCompletionsUrl(allocator);
         defer allocator.free(url);
 
-        const body = try buildStreamingChatRequestBody(
+        const serialized_body = try buildStreamingChatRequestBody(
             allocator,
             request,
             effective_model,
@@ -1224,6 +1290,8 @@ pub const OpenAiCompatibleProvider = struct {
             request.session_id,
             self.extra_body_params,
         );
+        defer allocator.free(serialized_body);
+        const body = try self.rewriteBodyWithSecondwind(allocator, serialized_body, effective_model);
         defer allocator.free(body);
 
         const auth = try self.authHeaderValue(allocator);
@@ -1444,7 +1512,7 @@ pub const OpenAiCompatibleProvider = struct {
         const url = try self.chatCompletionsUrl(allocator);
         defer allocator.free(url);
 
-        const body = try buildChatRequestBody(
+        const serialized_body = try buildChatRequestBody(
             allocator,
             capped_request,
             effective_model,
@@ -1457,6 +1525,8 @@ pub const OpenAiCompatibleProvider = struct {
             capped_request.session_id,
             self.extra_body_params,
         );
+        defer allocator.free(serialized_body);
+        const body = try self.rewriteBodyWithSecondwind(allocator, serialized_body, effective_model);
         defer allocator.free(body);
 
         const auth = try self.authHeaderValue(allocator);
@@ -3287,4 +3357,40 @@ test "shouldSkipStreaming: multi-message total triggers skip when sum exceeds li
     // Individual messages are each under the limit; verify the sum is what matters.
     const single = root.ChatRequest{ .messages = &[_]root.ChatMessage{m1}, .model = "m" };
     try std.testing.expect(!OpenAiCompatibleProvider.shouldSkipStreaming(25, single));
+}
+
+
+test "Secondwind provider hook is disabled by default and preserves serialized JSON" {
+    var provider = OpenAiCompatibleProvider.init(
+        std.testing.allocator,
+        "test",
+        "https://example.com/v1",
+        null,
+        .bearer,
+        null,
+    );
+    const request_json = "{\"model\":\"m\",\"messages\":[{\"role\":\"tool\",\"content\":\"result\"}]}";
+    const rewritten = try provider.rewriteBodyWithSecondwind(std.testing.allocator, request_json, "m");
+    defer std.testing.allocator.free(rewritten);
+    try std.testing.expectEqualStrings(request_json, rewritten);
+    try std.testing.expect(provider.secondwind_session == null);
+    try std.testing.expect(provider.secondwind_gateway == null);
+}
+
+test "disabling Secondwind clears opt-in policy state" {
+    var provider = OpenAiCompatibleProvider.init(
+        std.testing.allocator,
+        "test",
+        "https://example.com/v1",
+        null,
+        .bearer,
+        null,
+    );
+    provider.secondwind_intent_id = 42;
+    provider.secondwind_policy_allowed = true;
+    provider.secondwind_cache_compatible = true;
+    provider.disableSecondwind();
+    try std.testing.expectEqual(@as(u128, 0), provider.secondwind_intent_id);
+    try std.testing.expect(!provider.secondwind_policy_allowed);
+    try std.testing.expect(!provider.secondwind_cache_compatible);
 }
